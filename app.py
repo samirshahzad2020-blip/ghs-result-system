@@ -11,20 +11,16 @@ DEFAULT_SUBJECTS = [
     "English", "Urdu", "Mathematics", "Islamiat", 
     "Science", "Social Study", "Computer", "Tajuma-tu-Quran"
 ]
-CLASSES = ["9", "10", "11", "12"]
+# Updated classes from Nursery to 8th
+CLASSES = ["Nursery", "K.G", "1st", "2nd", "3rd", "4th", "5th", "6th", "7th", "8th"]
 SECTIONS = ["A", "B", "C"]
 
 # --- SESSION STATE INITIALIZATION ---
 if 'students_db' not in st.session_state:
-    # Initial Sample Data
-    st.session_state.students_db = pd.DataFrame([
-        {
-            "Roll No": 1, "Name": "Sample Student", "Father Name": "Father Name", 
-            "Class": "9", "Section": "A",
-            **{sub: 0 for sub in DEFAULT_SUBJECTS},
-            **{f"Total_{sub}": 50 for sub in DEFAULT_SUBJECTS}
-        }
-    ])
+    # Starting with an empty database structure
+    st.session_state.students_db = pd.DataFrame(columns=[
+        "Roll No", "Name", "Father Name", "Class", "Section"
+    ] + DEFAULT_SUBJECTS + [f"Total_{sub}" for sub in DEFAULT_SUBJECTS])
 
 # --- HELPER FUNCTIONS ---
 def get_grade(percentage):
@@ -141,7 +137,7 @@ st.title("🛡️ GHS Management Portal")
 
 with st.sidebar:
     st.header("Global Filters")
-    # 1. Class Selection
+    # 1. Class Selection (Nursery to 8th)
     active_class = st.selectbox("Current Working Class", CLASSES)
     
     st.divider()
@@ -158,6 +154,7 @@ with st.sidebar:
 
     selected_subjects = []
     for sub in DEFAULT_SUBJECTS:
+        # Provide default 'True' if state doesn't exist
         if st.checkbox(sub, value=st.session_state.get(f"sub_{sub}", True), key=f"sub_{sub}"):
             selected_subjects.append(sub)
             
@@ -188,11 +185,11 @@ with tab_marks:
     st.header(f"Grading Panel - Class {active_class}")
     
     if filtered_db.empty:
-        st.info(f"No students found in Class {active_class}. Please add them in the Student Directory.")
+        st.info(f"No students found in Class {active_class}. Register them in Student Directory.")
     else:
         student_to_grade = st.selectbox("Select Student", filtered_db["Name"].unique())
         
-        # Locate in original DB
+        # Locate correct index in global DB
         idx = st.session_state.students_db[(st.session_state.students_db["Name"] == student_to_grade) & 
                                           (st.session_state.students_db["Class"] == active_class)].index[0]
         curr_data = st.session_state.students_db.loc[idx]
@@ -201,8 +198,14 @@ with tab_marks:
             st.write(f"Updating: **{curr_data['Name']}** (Roll No: {curr_data['Roll No']})")
             for sub in selected_subjects:
                 c1, c2 = st.columns(2)
-                obtained = c1.number_input(f"{sub} Obtained", min_value=0, max_value=500, value=int(curr_data.get(sub, 0)))
-                total_m = c2.number_input(f"{sub} Total Marks", min_value=1, max_value=500, value=int(curr_data.get(f"Total_{sub}", 50)))
+                # Ensure we handle missing columns gracefully
+                val_obt = curr_data.get(sub, 0)
+                val_tot = curr_data.get(f"Total_{sub}", 50)
+                
+                obtained = c1.number_input(f"{sub} Obtained", min_value=0, max_value=500, value=int(val_obt if pd.notnull(val_obt) else 0))
+                total_m = c2.number_input(f"{sub} Total Marks", min_value=1, max_value=500, value=int(val_tot if pd.notnull(val_tot) else 50))
+                
+                # Update Session State
                 st.session_state.students_db.at[idx, sub] = obtained
                 st.session_state.students_db.at[idx, f"Total_{sub}"] = total_m
             
@@ -212,7 +215,6 @@ with tab_marks:
 with tab_db:
     st.header(f"Class {active_class} Directory")
     
-    # Add Student specifically to the selected class
     with st.expander(f"➕ Add Student to Class {active_class}"):
         with st.form("reg_form"):
             c1, c2, c3 = st.columns(3)
@@ -243,7 +245,7 @@ with tab_bulk:
         col1, col2 = st.columns(2)
         
         with col1:
-            st.subheader("Single Student Print")
+            st.subheader("Individual Result")
             print_target = st.selectbox("Choose Student", filtered_db["Name"])
             if st.button("Generate Card"):
                 row_data = filtered_db[filtered_db["Name"] == print_target].iloc[0]
@@ -253,14 +255,14 @@ with tab_bulk:
                 st.download_button(label=f"⬇️ Download {print_target}'s Card", data=bytes(pdf_bytes), file_name=f"Result_{print_target}.pdf", mime="application/pdf")
                 
         with col2:
-            st.subheader("Bulk Class Print")
-            st.write(f"Download all {len(filtered_db)} result cards for Class {active_class}.")
-            if st.button(f"Prepare Class {active_class} Results"):
+            st.subheader("Bulk Class Results")
+            st.write(f"Generate result cards for all {len(filtered_db)} students in Class {active_class}.")
+            if st.button(f"Prepare Bulk PDF"):
                 pdf = ResultPDF()
-                # Sort by roll no for bulk print
+                # Sort by roll no
                 sorted_class = filtered_db.sort_values("Roll No")
                 for _, row in sorted_class.iterrows():
                     pdf.draw_report_card(row, selected_subjects, logo_path=school_logo if school_logo else None)
                 
                 bulk_bytes = pdf.output()
-                st.download_button(label=f"⬇️ Download Class {active_class} Bulk PDF", data=bytes(bulk_bytes), file_name=f"Class_{active_class}_Results.pdf", mime="application/pdf")
+                st.download_button(label=f"⬇️ Download Bulk PDF", data=bytes(bulk_bytes), file_name=f"Class_{active_class}_Results.pdf", mime="application/pdf")
