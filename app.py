@@ -11,7 +11,7 @@ DEFAULT_SUBJECTS = [
     "English", "Urdu", "Mathematics", "Islamiat", 
     "Science", "Social Study", "Computer", "Tajuma-tu-Quran"
 ]
-# Updated classes from Nursery to 8th
+# Classes from Nursery to 8th
 CLASSES = ["Nursery", "K.G", "1st", "2nd", "3rd", "4th", "5th", "6th", "7th", "8th"]
 SECTIONS = ["A", "B", "C"]
 
@@ -154,7 +154,6 @@ with st.sidebar:
 
     selected_subjects = []
     for sub in DEFAULT_SUBJECTS:
-        # Provide default 'True' if state doesn't exist
         if st.checkbox(sub, value=st.session_state.get(f"sub_{sub}", True), key=f"sub_{sub}"):
             selected_subjects.append(sub)
             
@@ -198,14 +197,12 @@ with tab_marks:
             st.write(f"Updating: **{curr_data['Name']}** (Roll No: {curr_data['Roll No']})")
             for sub in selected_subjects:
                 c1, c2 = st.columns(2)
-                # Ensure we handle missing columns gracefully
                 val_obt = curr_data.get(sub, 0)
                 val_tot = curr_data.get(f"Total_{sub}", 50)
                 
                 obtained = c1.number_input(f"{sub} Obtained", min_value=0, max_value=500, value=int(val_obt if pd.notnull(val_obt) else 0))
                 total_m = c2.number_input(f"{sub} Total Marks", min_value=1, max_value=500, value=int(val_tot if pd.notnull(val_tot) else 50))
                 
-                # Update Session State
                 st.session_state.students_db.at[idx, sub] = obtained
                 st.session_state.students_db.at[idx, f"Total_{sub}"] = total_m
             
@@ -215,6 +212,7 @@ with tab_marks:
 with tab_db:
     st.header(f"Class {active_class} Directory")
     
+    # 1. ADD STUDENT
     with st.expander(f"➕ Add Student to Class {active_class}"):
         with st.form("reg_form"):
             c1, c2, c3 = st.columns(3)
@@ -234,6 +232,26 @@ with tab_db:
                 st.success(f"Added {n} to Class {active_class}")
                 st.rerun()
     
+    st.divider()
+    
+    # 2. DELETE STUDENT SECTION
+    st.subheader("Manage Existing Students")
+    if filtered_db.empty:
+        st.write("No students registered in this class.")
+    else:
+        # Display as a table with a delete button column
+        for index, row in filtered_db.iterrows():
+            col_info, col_del = st.columns([4, 1])
+            with col_info:
+                st.write(f"**Roll No:** {row['Roll No']} | **Name:** {row['Name']} | **Father:** {row['Father Name']}")
+            with col_del:
+                if st.button(f"🗑️ Delete", key=f"del_{row['Class']}_{row['Roll No']}_{index}"):
+                    # Drop from global session database
+                    st.session_state.students_db = st.session_state.students_db.drop(index).reset_index(drop=True)
+                    st.success(f"Student removed.")
+                    st.rerun()
+    
+    st.divider()
     st.dataframe(filtered_db[["Roll No", "Name", "Father Name", "Section"]], use_container_width=True)
 
 with tab_bulk:
@@ -259,7 +277,6 @@ with tab_bulk:
             st.write(f"Generate result cards for all {len(filtered_db)} students in Class {active_class}.")
             if st.button(f"Prepare Bulk PDF"):
                 pdf = ResultPDF()
-                # Sort by roll no
                 sorted_class = filtered_db.sort_values("Roll No")
                 for _, row in sorted_class.iterrows():
                     pdf.draw_report_card(row, selected_subjects, logo_path=school_logo if school_logo else None)
