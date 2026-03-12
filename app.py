@@ -1,335 +1,262 @@
-# ==============================
-# SCHOOL RESULT SYSTEM (ALL-IN-ONE)
-# ==============================
+# app.py
 
 import streamlit as st
-import sqlite3
-import hashlib
+import pandas as pd
+import os
 from reportlab.lib.pagesizes import A4
-from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
-from reportlab.lib import colors
-from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.pdfgen import canvas
 from io import BytesIO
 
-# -----------------------------
-# CONFIG
-# -----------------------------
-st.set_page_config(page_title="School Result System", layout="wide")
-DB_NAME = "database.db"
+st.set_page_config(page_title="Student Result Generator", layout="wide")
 
-# -----------------------------
-# DATABASE
-# -----------------------------
-def connect():
-    return sqlite3.connect(DB_NAME, check_same_thread=False)
+# -------------------------------
+# Paths for persistent storage
+# -------------------------------
+DATA_DIR = "data"
+STUDENT_FILE = os.path.join(DATA_DIR, "students.csv")
+MARKS_FILE = os.path.join(DATA_DIR, "marks.csv")
+TEACHERS_FILE = os.path.join(DATA_DIR, "teachers.csv")
+LOGO_PATH = "logo.png"
 
-def init_db():
-    conn = connect()
-    c = conn.cursor()
+# -------------------------------
+# Ensure data directory exists
+# -------------------------------
+os.makedirs(DATA_DIR, exist_ok=True)
 
-    c.execute("""CREATE TABLE IF NOT EXISTS users(
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        username TEXT UNIQUE,
-        password TEXT,
-        role TEXT)""")
+# -------------------------------
+# Initialize CSVs if missing
+# -------------------------------
+def init_csv(file_path, columns):
+    if not os.path.exists(file_path):
+        df = pd.DataFrame(columns=columns)
+        df.to_csv(file_path, index=False)
+        return df
+    else:
+        return pd.read_csv(file_path)
 
-    c.execute("""CREATE TABLE IF NOT EXISTS students(
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT,
-        father_name TEXT,
-        roll TEXT UNIQUE,
-        section TEXT,
-        session TEXT)""")
+students_df = init_csv(STUDENT_FILE, ["student_id","name","father_name","roll","section","session"])
+marks_df = init_csv(MARKS_FILE, ["student_id","subject","marks_obtained","total_marks","teacher"])
+teachers_df = init_csv(TEACHERS_FILE, ["teacher_name","assigned_subjects","assigned_class"])
 
-    c.execute("""CREATE TABLE IF NOT EXISTS teachers(
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT,
-        assigned_class TEXT,
-        subjects TEXT)""")
+# -------------------------------
+# Helper functions
+# -------------------------------
+def calculate_grade(percentage):
+    if percentage >= 90: return "A+"
+    elif percentage >= 80: return "A"
+    elif percentage >= 70: return "B+"
+    elif percentage >= 60: return "B"
+    elif percentage >= 50: return "C"
+    else: return "F"
 
-    c.execute("""CREATE TABLE IF NOT EXISTS marks(
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        student_id INTEGER,
-        subject TEXT,
-        marks INTEGER,
-        total INTEGER,
-        teacher_id INTEGER,
-        UNIQUE(student_id,subject))""")
-
-    conn.commit()
-    conn.close()
-
-init_db()
-
-# -----------------------------
-# AUTH
-# -----------------------------
-def hash_pass(p):
-    return hashlib.sha256(p.encode()).hexdigest()
-
-def login(username, password):
-    conn = connect()
-    c = conn.cursor()
-    c.execute("SELECT id,role,password FROM users WHERE username=?", (username,))
-    user = c.fetchone()
-    conn.close()
-
-    if user and user[2] == hash_pass(password):
-        return {"id": user[0], "role": user[1]}
-    return None
-
-# create default admin if not exists
-conn = connect()
-c = conn.cursor()
-c.execute("SELECT * FROM users WHERE username='admin'")
-if not c.fetchone():
-    c.execute("INSERT INTO users(username,password,role) VALUES (?,?,?)",
-              ("admin", hash_pass("admin123"), "admin"))
-conn.commit()
-conn.close()
-
-# -----------------------------
-# GRADING
-# -----------------------------
-def grade(p):
-    if p >= 90: return "A+"
-    elif p >= 80: return "A"
-    elif p >= 70: return "B+"
-    elif p >= 60: return "B"
-    elif p >= 50: return "C"
-    return "F"
-
-# -----------------------------
-# PDF GENERATOR
-# -----------------------------
-def generate_pdf(student, marks, position):
-
+def generate_result_pdf(student_info, student_marks, teachers, logo_path=LOGO_PATH):
     buffer = BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=A4)
-    styles = getSampleStyleSheet()
-    elements = []
+    c = canvas.Canvas(buffer, pagesize=A4)
+    width, height = A4
 
-    elements.append(Paragraph(
-        "<b>Govt High School Bhutta Mohabbat</b>", styles["Title"]))
-    elements.append(Paragraph("EMIS Code: 39310025", styles["Normal"]))
-    elements.append(Spacer(1, 20))
+    # Logo
+    if os.path.exists(logo_path):
+        c.drawImage(logo_path, 50, height-100, width=80, height=80, preserveAspectRatio=True)
 
-    info = f"""
-    <b>Student:</b> {student['name']}<br/>
-    <b>Father:</b> {student['father_name']}<br/>
-    <b>Class:</b> {student['section']} &nbsp;&nbsp;
-    <b>Roll:</b> {student['roll']}<br/>
-    <b>Session:</b> {student['session']}
-    """
+    # School Info
+    c.setFont("Helvetica-Bold", 16)
+    c.drawCentredString(width/2, height-50, "Govt High School Bhutta Mohabbat")
+    c.setFont("Helvetica", 12)
+    c.drawCentredString(width/2, height-70, "EMIS Code: 39310025")
 
-    elements.append(Paragraph(info, styles["Normal"]))
-    elements.append(Spacer(1, 20))
+    # Student Info
+    c.setFont("Helvetica-Bold", 12)
+    c.drawString(50, height-150, f"Student Name: {student_info['name']}")
+    c.drawString(50, height-170, f"Father Name: {student_info['father_name']}")
+    c.drawString(50, height-190, f"Session: {student_info['session']}")
+    c.drawString(50, height-210, f"Class: {student_info['section']}  Roll: {student_info['roll']}")
 
-    data = [["Subject","Obtained","Total","Grade"]]
+    # Marks Table
+    c.drawString(50, height-240, "Subject-wise Marks:")
+    y = height-260
+    c.setFont("Helvetica", 11)
+    c.drawString(50, y, "Subject")
+    c.drawString(200, y, "Obtained Marks")
+    c.drawString(350, y, "Total Marks")
+    y -= 20
+    for _, row in student_marks.iterrows():
+        c.drawString(50, y, str(row['subject']))
+        c.drawString(200, y, str(row['marks_obtained']))
+        c.drawString(350, y, str(row['total_marks']))
+        y -= 20
 
-    total = 0
-    max_total = 0
+    # Grand Total
+    grand_total = student_marks['marks_obtained'].sum()
+    max_total = student_marks['total_marks'].sum()
+    percentage = (grand_total/max_total)*100
+    grade = calculate_grade(percentage)
 
-    for m in marks:
-        perc = (m[1]/m[2])*100 if m[2] else 0
-        g = grade(perc)
-        data.append([m[0], m[1], m[2], g])
-        total += m[1]
-        max_total += m[2]
+    y -= 20
+    c.setFont("Helvetica-Bold", 12)
+    c.drawString(50, y, f"Grand Total: {grand_total}/{max_total}")
+    y -= 20
+    c.drawString(50, y, f"Percentage: {percentage:.2f}%")
+    y -= 20
+    c.drawString(50, y, f"Grade: {grade}")
 
-    percentage = (total/max_total*100) if max_total else 0
-    final_grade = grade(percentage)
+    # Teachers and Headmaster
+    y -= 40
+    c.drawString(50, y, "Teacher(s): " + ", ".join(teachers))
+    c.drawString(350, y, "Senior Headmaster: Safdar Javed")
 
-    data.append(["Grand Total", total, max_total, final_grade])
-    data.append(["Percentage", f"{percentage:.2f}%", "", f"Position {position}"])
+    # Quotes
+    y -= 40
+    c.setFont("Helvetica-Oblique", 10)
+    c.drawString(50, y, "Education is the most powerful weapon which you can use to change the world.")
+    y -= 15
+    c.drawString(50, y, "The function of education is to teach one to think intensively and to think critically.")
+    y -= 20
+    c.drawString(50, y, "District: Okara")
 
-    table = Table(data, colWidths=[150,100,100,100])
-    table.setStyle(TableStyle([
-        ("GRID",(0,0),(-1,-1),1,colors.black),
-        ("BACKGROUND",(0,0),(-1,0),colors.lightgrey),
-        ("ALIGN",(1,1),(-1,-1),"CENTER"),
-    ]))
-
-    elements.append(table)
-    elements.append(Spacer(1,30))
-    elements.append(Paragraph("Senior Headmaster: Safdar Javed", styles["Normal"]))
-
-    doc.build(elements)
+    c.showPage()
+    c.save()
     buffer.seek(0)
     return buffer
 
-# -----------------------------
-# SESSION
-# -----------------------------
-if "user" not in st.session_state:
-    st.session_state.user = None
+# -------------------------------
+# Header
+# -------------------------------
+col1, col2, col3 = st.columns([1,4,1])
+with col1:
+    if os.path.exists(LOGO_PATH):
+        st.image(LOGO_PATH, width=80)
+with col2:
+    st.markdown("<h2 style='text-align:center;'>Govt High School Bhutta Mohabbat</h2>", unsafe_allow_html=True)
+    st.markdown("<h5 style='text-align:center;'>EMIS Code: 39310025</h5>", unsafe_allow_html=True)
+with col3:
+    st.write("")
 
-# -----------------------------
-# LOGIN PAGE
-# -----------------------------
-if not st.session_state.user:
+st.markdown("---")
 
-    st.title("School Result System Login")
+# -------------------------------
+# Sidebar Navigation
+# -------------------------------
+page = st.sidebar.selectbox("Select Page", ["Admin", "Teacher Portal", "Result Generator"])
 
-    u = st.text_input("Username")
-    p = st.text_input("Password", type="password")
+# -------------------------------
+# Admin
+# -------------------------------
+if page=="Admin":
+    st.header("Admin Panel")
+    tab = st.radio("Choose Action", ["Add Teacher","Add Student","View/Edit Data"])
 
-    if st.button("Login"):
-        user = login(u,p)
-        if user:
-            st.session_state.user = user
-            st.rerun()
+    if tab=="Add Teacher":
+        t_name = st.text_input("Teacher Name")
+        t_class = st.selectbox("Assigned Class", ["A","B"])
+        t_subjects = st.multiselect("Assigned Subjects", ["Urdu","English","Islamiat","Tarjuma-tul-Quran","Maths","Science","Social Studies","Nazra Quran","GK"])
+        if st.button("Add Teacher"):
+            if t_name and t_class and t_subjects:
+                if t_name in teachers_df['teacher_name'].values:
+                    st.warning("Teacher already exists!")
+                else:
+                    teachers_df = pd.concat([teachers_df,pd.DataFrame([{"teacher_name":t_name,"assigned_subjects":",".join(t_subjects),"assigned_class":t_class}])],ignore_index=True)
+                    teachers_df.to_csv(TEACHERS_FILE,index=False)
+                    st.success(f"Teacher {t_name} added!")
+
+    elif tab=="Add Student":
+        s_name = st.text_input("Student Name")
+        f_name = st.text_input("Father Name")
+        roll = st.text_input("Roll Number")
+        s_class = st.selectbox("Class Section", ["A","B"])
+        session = st.text_input("Session", value="2025-2026")
+        if st.button("Add Student"):
+            if s_name and f_name and roll and s_class and session:
+                if roll in students_df['roll'].values:
+                    st.warning("Roll exists!")
+                else:
+                    new_id = students_df['student_id'].max()+1 if not students_df.empty else 1
+                    students_df = pd.concat([students_df,pd.DataFrame([{"student_id":new_id,"name":s_name,"father_name":f_name,"roll":roll,"section":s_class,"session":session}])],ignore_index=True)
+                    students_df.to_csv(STUDENT_FILE,index=False)
+                    st.success(f"Student {s_name} added!")
+
+    elif tab=="View/Edit Data":
+        st.subheader("Teachers")
+        st.dataframe(teachers_df)
+        st.subheader("Students")
+        st.dataframe(students_df)
+        st.subheader("Marks")
+        st.dataframe(marks_df)
+
+# -------------------------------
+# Teacher Portal
+# -------------------------------
+elif page=="Teacher Portal":
+    st.header("Teacher Portal")
+    teacher_name = st.text_input("Enter Teacher Name")
+    if teacher_name and teacher_name in teachers_df['teacher_name'].values:
+        t_info = teachers_df[teachers_df['teacher_name']==teacher_name].iloc[0]
+        assigned_subjects = t_info['assigned_subjects'].split(",")
+        assigned_class = t_info['assigned_class']
+
+        st.success(f"Welcome {teacher_name}! Class {assigned_class}, subjects: {', '.join(assigned_subjects)}")
+        class_students = students_df[students_df['section']==assigned_class]
+
+        for _, student in class_students.iterrows():
+            st.markdown(f"### {student['name']} (Roll: {student['roll']})")
+            cols = st.columns(len(assigned_subjects))
+            marks_input = {}
+            for i, subject in enumerate(assigned_subjects):
+                existing = marks_df[(marks_df['student_id']==student['student_id']) & (marks_df['subject']==subject)]
+                current = int(existing['marks_obtained'].values[0]) if not existing.empty else 0
+                marks_input[subject] = cols[i].number_input(subject, min_value=0, max_value=100, value=current, key=f"{student['student_id']}_{subject}")
+            if st.button(f"Save Marks {student['name']}", key=f"save_{student['student_id']}"):
+                for subject, mark in marks_input.items():
+                    idx = marks_df[(marks_df['student_id']==student['student_id']) & (marks_df['subject']==subject)].index
+                    if len(idx)>0:
+                        marks_df.at[idx[0],'marks_obtained']=mark
+                        marks_df.at[idx[0],'total_marks']=100
+                        marks_df.at[idx[0],'teacher']=teacher_name
+                    else:
+                        marks_df = pd.concat([marks_df,pd.DataFrame([{"student_id":student['student_id'],"subject":subject,"marks_obtained":mark,"total_marks":100,"teacher":teacher_name}])],ignore_index=True)
+                marks_df.to_csv(MARKS_FILE,index=False)
+                st.success(f"Marks saved for {student['name']}!")
+
+    elif teacher_name:
+        st.warning("Teacher not found! Ask admin to add.")
+
+# -------------------------------
+# Result Generator
+# -------------------------------
+elif page=="Result Generator":
+    st.header("Generate Student Result")
+    section = st.selectbox("Class Section", ["A","B"])
+    students_in_class = students_df[students_df['section']==section]
+    if not students_in_class.empty:
+        selected = st.selectbox("Select Student", students_in_class['name'])
+        student_info = students_in_class[students_in_class['name']==selected].iloc[0]
+        student_marks = marks_df[marks_df['student_id']==student_info['student_id']]
+        if not student_marks.empty:
+            grand_total = student_marks['marks_obtained'].sum()
+            max_total = student_marks['total_marks'].sum()
+            percentage = (grand_total/max_total)*100
+            grade = calculate_grade(percentage)
+
+            col1,col2 = st.columns(2)
+            with col1:
+                st.write("Teacher(s):", ", ".join(student_marks['teacher'].unique()))
+            with col2:
+                st.write("Senior Headmaster: Safdar Javed")
+
+            st.markdown(f"**Student Name:** {student_info['name']}")
+            st.markdown(f"**Father Name:** {student_info['father_name']}")
+            st.markdown(f"**Session:** {student_info['session']} | Class: {student_info['section']} | Roll: {student_info['roll']}")
+            st.table(student_marks[['subject','marks_obtained','total_marks']])
+            st.markdown(f"**Grand Total:** {grand_total}/{max_total}")
+            st.markdown(f"**Percentage:** {percentage:.2f}%")
+            st.markdown(f"**Grade:** {grade}")
+
+            st.markdown("---")
+            st.markdown("> Education is the most powerful weapon which you can use to change the world.")
+            st.markdown("> The function of education is to teach one to think intensively and to think critically.")
+            st.markdown("**District: Okara**")
+
+            if st.button("Download PDF Result"):
+                pdf_buffer = generate_result_pdf(student_info, student_marks, list(student_marks['teacher'].unique()))
+                st.download_button("Download PDF", data=pdf_buffer, file_name=f"{student_info['name']}_result.pdf", mime="application/pdf")
         else:
-            st.error("Invalid Login")
-
-# -----------------------------
-# MAIN APP
-# -----------------------------
-else:
-
-    conn = connect()
-    c = conn.cursor()
-
-    role = st.session_state.user["role"]
-
-    menu = st.sidebar.selectbox(
-        "Menu",
-        ["Admin","Teacher","Results"]
-    )
-
-    # ================= ADMIN =================
-    if menu=="Admin" and role=="admin":
-
-        st.header("Admin Panel")
-
-        tab = st.radio("Action",["Add Student","Add Teacher"])
-
-        if tab=="Add Student":
-            name = st.text_input("Name")
-            father = st.text_input("Father Name")
-            roll = st.text_input("Roll")
-            section = st.selectbox("Section",["A","B"])
-            session = st.text_input("Session","2025-26")
-
-            if st.button("Add Student"):
-                c.execute("""INSERT INTO students
-                (name,father_name,roll,section,session)
-                VALUES (?,?,?,?,?)""",
-                (name,father,roll,section,session))
-                conn.commit()
-                st.success("Student Added")
-
-        if tab=="Add Teacher":
-            name = st.text_input("Teacher Name")
-            subjects = st.text_input("Subjects comma separated")
-            cls = st.selectbox("Class",["A","B"])
-
-            if st.button("Add Teacher"):
-                c.execute("""INSERT INTO teachers
-                (name,assigned_class,subjects)
-                VALUES (?,?,?)""",
-                (name,cls,subjects))
-                conn.commit()
-                st.success("Teacher Added")
-
-    # ================= TEACHER =================
-    elif menu=="Teacher":
-
-        st.header("Teacher Portal")
-
-        c.execute("SELECT * FROM teachers LIMIT 1")
-        teacher = c.fetchone()
-
-        if teacher:
-            subjects = teacher[3].split(",")
-
-            c.execute("SELECT * FROM students WHERE section=?", (teacher[2],))
-            students = c.fetchall()
-
-            for s in students:
-                st.subheader(f"{s[1]} (Roll {s[3]})")
-
-                inputs = {}
-                for sub in subjects:
-                    inputs[sub] = st.number_input(
-                        sub,0,100,key=f"{s[0]}_{sub}")
-
-                if st.button("Save", key=f"save{s[0]}"):
-                    for sub,mark in inputs.items():
-                        c.execute("""
-                        INSERT OR REPLACE INTO marks
-                        (student_id,subject,marks,total,teacher_id)
-                        VALUES (?,?,?,?,?)
-                        """,(s[0],sub,mark,100,
-                             st.session_state.user["id"]))
-
-                    conn.commit()
-                    st.success("Saved")
-
-    # ================= RESULTS =================
-    elif menu=="Results":
-
-        st.header("Result Generator")
-
-        c.execute("SELECT id,name,section FROM students")
-        students = c.fetchall()
-
-        names = {s[1]:(s[0],s[2]) for s in students}
-
-        selected = st.selectbox("Student", list(names.keys()))
-
-        if selected:
-            sid, section = names[selected]
-
-            c.execute("SELECT * FROM students WHERE id=?", (sid,))
-            student = c.fetchone()
-
-            c.execute("SELECT subject,marks,total FROM marks WHERE student_id=?", (sid,))
-            marks = c.fetchall()
-
-            if marks:
-
-                # merit
-                c.execute("""
-                SELECT s.id, SUM(m.marks)
-                FROM students s
-                JOIN marks m ON s.id=m.student_id
-                WHERE s.section=?
-                GROUP BY s.id
-                ORDER BY SUM(m.marks) DESC
-                """,(section,))
-                ranking = c.fetchall()
-                position = [r[0] for r in ranking].index(sid)+1
-
-                total = sum(m[1] for m in marks)
-                max_total = sum(m[2] for m in marks)
-                percentage = total/max_total*100
-                st.write(f"Total: {total}/{max_total}")
-                st.write(f"Percentage: {percentage:.2f}%")
-                st.write(f"Grade: {grade(percentage)}")
-                st.write(f"Position: {position}")
-
-                if st.button("Generate PDF"):
-                    pdf = generate_pdf(
-                        {
-                            "name":student[1],
-                            "father_name":student[2],
-                            "roll":student[3],
-                            "section":student[4],
-                            "session":student[5]
-                        },
-                        marks,
-                        position
-                    )
-
-                    st.download_button(
-                        "Download Result",
-                        pdf,
-                        file_name=f"{student[1]}_result.pdf"
-                    )
-
-    if st.sidebar.button("Logout"):
-        st.session_state.user=None
-        st.rerun()
-
-    conn.close()
+            st.info("No marks entered yet.")
