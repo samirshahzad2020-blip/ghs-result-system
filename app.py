@@ -6,25 +6,25 @@ import io
 # --- APP CONFIG ---
 st.set_page_config(page_title="GHS Result System", layout="wide", page_icon="🏫")
 
-# --- SUBJECTS LIST ---
+# --- CONSTANTS ---
 DEFAULT_SUBJECTS = [
     "English", "Urdu", "Mathematics", "Islamiat", 
     "Science", "Social Study", "Computer", "Tajuma-tu-Quran"
 ]
+CLASSES = ["9", "10", "11", "12"]
+SECTIONS = ["A", "B", "C"]
 
 # --- SESSION STATE INITIALIZATION ---
 if 'students_db' not in st.session_state:
+    # Initial Sample Data
     st.session_state.students_db = pd.DataFrame([
         {
-            "Roll No": 12, "Name": "FAIZ", "Father Name": "SARWAR", 
+            "Roll No": 1, "Name": "Sample Student", "Father Name": "Father Name", 
             "Class": "9", "Section": "A",
             **{sub: 0 for sub in DEFAULT_SUBJECTS},
             **{f"Total_{sub}": 50 for sub in DEFAULT_SUBJECTS}
         }
     ])
-
-if 'selected_subjects' not in st.session_state:
-    st.session_state.selected_subjects = DEFAULT_SUBJECTS.copy()
 
 # --- HELPER FUNCTIONS ---
 def get_grade(percentage):
@@ -119,7 +119,7 @@ class ResultPDF(FPDF):
         self.cell(47, 10, f"PERFORMANCE: {get_performance(grade)}", 1, 0, 'C')
         self.cell(49, 10, f"FINAL GRADE: {grade}", 1, 1, 'C')
         
-        # Bottom Quotes (Fixed spacing and centering)
+        # Footer Quotes
         self.ln(20)
         self.set_font("Helvetica", 'I', 10)
         self.multi_cell(190, 6, '"Education is the most powerful weapon which you can use to change the world."\n"The beautiful thing about learning is that no one can take it away from you."', align='C')
@@ -137,14 +137,32 @@ class ResultPDF(FPDF):
         self.cell(190, 10, "Result Declaration Date: 31-03-2026", 0, 0, 'R')
 
 # --- UI INTERFACE ---
-st.title("🛡️ GHS Bhutta Mohabbat Portal")
+st.title("🛡️ GHS Management Portal")
 
 with st.sidebar:
-    st.header("Settings")
-    school_logo = st.file_uploader("Upload School Logo", type=['png', 'jpg', 'jpeg'])
+    st.header("Global Filters")
+    # 1. Class Selection
+    active_class = st.selectbox("Current Working Class", CLASSES)
     
-    st.subheader("Subject Selection")
-    st.session_state.selected_subjects = [sub for sub in DEFAULT_SUBJECTS if st.checkbox(sub, value=True)]
+    st.divider()
+    # 2. Subject Selection with Check/Uncheck All
+    st.subheader("Manage Subjects")
+    
+    col_t1, col_t2 = st.columns(2)
+    if col_t1.button("Check All"):
+        for sub in DEFAULT_SUBJECTS:
+            st.session_state[f"sub_{sub}"] = True
+    if col_t2.button("Uncheck All"):
+        for sub in DEFAULT_SUBJECTS:
+            st.session_state[f"sub_{sub}"] = False
+
+    selected_subjects = []
+    for sub in DEFAULT_SUBJECTS:
+        if st.checkbox(sub, value=st.session_state.get(f"sub_{sub}", True), key=f"sub_{sub}"):
+            selected_subjects.append(sub)
+            
+    st.divider()
+    school_logo = st.file_uploader("School Logo", type=['png', 'jpg', 'jpeg'])
 
     if 'auth' not in st.session_state:
         pwd = st.text_input("Access Key", type="password")
@@ -160,67 +178,89 @@ with st.sidebar:
         st.session_state.clear()
         st.rerun()
 
+# --- FILTER DATA BY CLASS ---
+filtered_db = st.session_state.students_db[st.session_state.students_db["Class"] == active_class]
+
 # Main Tabs
-tab_marks, tab_db, tab_bulk = st.tabs(["🖊️ Add Marks", "📋 Student List", "🖨️ Generate Reports"])
+tab_marks, tab_db, tab_bulk = st.tabs(["🖊️ Marks Entry", "📋 Student Directory", "🖨️ Reports"])
 
 with tab_marks:
-    st.header("Daily Student Grading")
-    student_to_grade = st.selectbox("Select Student", st.session_state.students_db["Name"].unique())
-    idx = st.session_state.students_db[st.session_state.students_db["Name"] == student_to_grade].index[0]
-    curr_data = st.session_state.students_db.loc[idx]
+    st.header(f"Grading Panel - Class {active_class}")
     
-    with st.form("marks_entry_form"):
-        st.write(f"Editing: **{curr_data['Name']}**")
-        for sub in st.session_state.selected_subjects:
-            c1, c2 = st.columns(2)
-            obtained = c1.number_input(f"{sub} Obtained", min_value=0, max_value=500, value=int(curr_data.get(sub, 0)))
-            total_m = c2.number_input(f"{sub} Total Marks", min_value=1, max_value=500, value=int(curr_data.get(f"Total_{sub}", 50)))
-            st.session_state.students_db.at[idx, sub] = obtained
-            st.session_state.students_db.at[idx, f"Total_{sub}"] = total_m
+    if filtered_db.empty:
+        st.info(f"No students found in Class {active_class}. Please add them in the Student Directory.")
+    else:
+        student_to_grade = st.selectbox("Select Student", filtered_db["Name"].unique())
         
-        if st.form_submit_button("Save Student Marks"):
-            st.success(f"Marks updated for {student_to_grade}!")
+        # Locate in original DB
+        idx = st.session_state.students_db[(st.session_state.students_db["Name"] == student_to_grade) & 
+                                          (st.session_state.students_db["Class"] == active_class)].index[0]
+        curr_data = st.session_state.students_db.loc[idx]
+        
+        with st.form("marks_entry_form"):
+            st.write(f"Updating: **{curr_data['Name']}** (Roll No: {curr_data['Roll No']})")
+            for sub in selected_subjects:
+                c1, c2 = st.columns(2)
+                obtained = c1.number_input(f"{sub} Obtained", min_value=0, max_value=500, value=int(curr_data.get(sub, 0)))
+                total_m = c2.number_input(f"{sub} Total Marks", min_value=1, max_value=500, value=int(curr_data.get(f"Total_{sub}", 50)))
+                st.session_state.students_db.at[idx, sub] = obtained
+                st.session_state.students_db.at[idx, f"Total_{sub}"] = total_m
+            
+            if st.form_submit_button("Save Student Marks"):
+                st.success(f"Marks updated for {student_to_grade}!")
 
 with tab_db:
-    st.header("Student Database")
-    with st.expander("Register New Student"):
+    st.header(f"Class {active_class} Directory")
+    
+    # Add Student specifically to the selected class
+    with st.expander(f"➕ Add Student to Class {active_class}"):
         with st.form("reg_form"):
             c1, c2, c3 = st.columns(3)
             r = c1.number_input("Roll No", min_value=1)
-            n = c2.text_input("Name")
+            n = c2.text_input("Full Name")
             f = c3.text_input("Father Name")
-            c4, c5 = st.columns(2)
-            cl = c4.selectbox("Class", ["9", "10"])
-            sc = c5.selectbox("Section", ["A", "B", "C"])
-            if st.form_submit_button("Register"):
-                new_row = {"Roll No": r, "Name": n, "Father Name": f, "Class": cl, "Section": sc, 
-                           **{s: 0 for s in DEFAULT_SUBJECTS}, **{f"Total_{s}": 50 for s in DEFAULT_SUBJECTS}}
+            sc = st.selectbox("Section", SECTIONS)
+            
+            if st.form_submit_button("Register Student"):
+                new_row = {
+                    "Roll No": r, "Name": n, "Father Name": f, 
+                    "Class": active_class, "Section": sc, 
+                    **{s: 0 for s in DEFAULT_SUBJECTS}, 
+                    **{f"Total_{s}": 50 for s in DEFAULT_SUBJECTS}
+                }
                 st.session_state.students_db = pd.concat([st.session_state.students_db, pd.DataFrame([new_row])], ignore_index=True)
+                st.success(f"Added {n} to Class {active_class}")
                 st.rerun()
-    st.dataframe(st.session_state.students_db, use_container_width=True)
+    
+    st.dataframe(filtered_db[["Roll No", "Name", "Father Name", "Section"]], use_container_width=True)
 
 with tab_bulk:
-    st.header("Print Result Cards")
-    col1, col2 = st.columns(2)
+    st.header(f"Generate Reports (Class {active_class})")
     
-    with col1:
-        st.subheader("Single Student Print")
-        print_target = st.selectbox("Choose Student", st.session_state.students_db["Name"])
-        if st.button("Generate This Result"):
-            row_data = st.session_state.students_db[st.session_state.students_db["Name"] == print_target].iloc[0]
-            pdf = ResultPDF()
-            pdf.draw_report_card(row_data, st.session_state.selected_subjects, logo_path=school_logo if school_logo else None)
-            
-            # FIXED: In fpdf2, output() returns bytes by default
-            pdf_bytes = pdf.output()
-            st.download_button(label=f"⬇️ Download {print_target}'s Card", data=bytes(pdf_bytes), file_name=f"Result_{print_target}.pdf", mime="application/pdf")
-            
-    with col2:
-        st.subheader("Bulk Print")
-        if st.button("Prepare All Results"):
-            pdf = ResultPDF()
-            for _, row in st.session_state.students_db.iterrows():
-                pdf.draw_report_card(row, st.session_state.selected_subjects, logo_path=school_logo if school_logo else None)
-            
-            bulk_bytes = pdf.output()
-            st.download_button(label="⬇️ Download All Results", data=bytes(bulk_bytes), file_name="GHS_All_Results.pdf", mime="application/pdf")
+    if filtered_db.empty:
+        st.error("No data available to print for this class.")
+    else:
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.subheader("Single Student Print")
+            print_target = st.selectbox("Choose Student", filtered_db["Name"])
+            if st.button("Generate Card"):
+                row_data = filtered_db[filtered_db["Name"] == print_target].iloc[0]
+                pdf = ResultPDF()
+                pdf.draw_report_card(row_data, selected_subjects, logo_path=school_logo if school_logo else None)
+                pdf_bytes = pdf.output()
+                st.download_button(label=f"⬇️ Download {print_target}'s Card", data=bytes(pdf_bytes), file_name=f"Result_{print_target}.pdf", mime="application/pdf")
+                
+        with col2:
+            st.subheader("Bulk Class Print")
+            st.write(f"Download all {len(filtered_db)} result cards for Class {active_class}.")
+            if st.button(f"Prepare Class {active_class} Results"):
+                pdf = ResultPDF()
+                # Sort by roll no for bulk print
+                sorted_class = filtered_db.sort_values("Roll No")
+                for _, row in sorted_class.iterrows():
+                    pdf.draw_report_card(row, selected_subjects, logo_path=school_logo if school_logo else None)
+                
+                bulk_bytes = pdf.output()
+                st.download_button(label=f"⬇️ Download Class {active_class} Bulk PDF", data=bytes(bulk_bytes), file_name=f"Class_{active_class}_Results.pdf", mime="application/pdf")
