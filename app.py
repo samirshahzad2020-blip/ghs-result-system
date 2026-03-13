@@ -9,16 +9,20 @@ from firebase_admin import credentials, firestore
 st.set_page_config(page_title="GHS Result System", layout="wide", page_icon="🏫")
 
 # --- FIREBASE SETUP ---
-# Collection path: /artifacts/ghs-bhutta-mohabbat/public/data/students
-APP_ID = "ghs-bhutta-mohabbat"
+APP_ID = "ghs-bhutta-mohabbat-final-v7"
 
 def init_firebase():
     if not firebase_admin._apps:
         try:
-            if "firebase" in st.secrets:
-                # Load the JSON string from secrets
+            if "firebase" in st.secrets and "textkey" in st.secrets["firebase"]:
                 raw_json = st.secrets["firebase"]["textkey"]
                 key_dict = json.loads(raw_json)
+                
+                # AUTO-FIX FOR PEM ERROR: 
+                # If the private_key has literal newlines instead of \n, this fixes it
+                if "private_key" in key_dict:
+                    key_dict["private_key"] = key_dict["private_key"].replace("\\n", "\n")
+                
                 creds = credentials.Certificate(key_dict)
                 firebase_admin.initialize_app(creds)
             else:
@@ -36,47 +40,39 @@ DEFAULT_SUBJECTS = ["English", "Urdu", "Mathematics", "Islamiat", "Science", "So
 SECTIONS = ["A", "B", "C"]
 
 # --- GRADING LOGIC ---
-def calculate_grade_and_perf(perc):
-    if perc >= 80: return "A+", "Excellent"
-    elif perc >= 70: return "A", "Very Good"
-    elif perc >= 60: return "B", "Good"
-    elif perc >= 50: return "C", "Satisfactory"
-    elif perc >= 40: return "D", "Fair"
+def calculate_grade_and_perf(p):
+    if p >= 80: return "A+", "Excellent"
+    elif p >= 70: return "A", "Very Good"
+    elif p >= 60: return "B", "Good"
+    elif p >= 50: return "C", "Satisfactory"
+    elif p >= 40: return "D", "Fair"
     else: return "F", "Poor"
 
 # --- DATA FUNCTIONS ---
 def get_data():
     if db:
         try:
-            # Rule 1: Correct Path
             docs = db.collection("artifacts", APP_ID, "public", "data", "students").stream()
             data = [doc.to_dict() for doc in docs]
             return pd.DataFrame(data) if data else pd.DataFrame(columns=["Roll No", "Name", "Class"])
-        except Exception as e:
-            st.error(f"Cloud Load Error: {e}")
+        except:
             return st.session_state.get('local_db', pd.DataFrame(columns=["Roll No", "Name", "Class"]))
     else:
-        if 'local_db' not in st.session_state:
-            st.session_state.local_db = pd.DataFrame(columns=["Roll No", "Name", "Class"])
+        if 'local_db' not in st.session_state: st.session_state.local_db = pd.DataFrame(columns=["Roll No", "Name", "Class"])
         return st.session_state.local_db
 
 def save_data(student):
     if db:
-        try:
-            uid = f"{student['Class']}_{student['Roll No']}".replace(" ", "_")
-            db.collection("artifacts", APP_ID, "public", "data", "students").document(uid).set(student)
-        except Exception as e:
-            st.error(f"Cloud Save Error: {e}")
+        uid = f"{student['Class']}_{student['Roll No']}".replace(" ", "_")
+        db.collection("artifacts", APP_ID, "public", "data", "students").document(uid).set(student)
     else:
-        if 'local_db' not in st.session_state:
-            st.session_state.local_db = pd.DataFrame([student])
+        if 'local_db' not in st.session_state: st.session_state.local_db = pd.DataFrame([student])
         else:
             mask = (st.session_state.local_db['Roll No'] == student['Roll No']) & (st.session_state.local_db['Class'] == student['Class'])
             if mask.any():
                 idx = st.session_state.local_db[mask].index[0]
                 for k, v in student.items(): st.session_state.local_db.at[idx, k] = v
-            else:
-                st.session_state.local_db = pd.concat([st.session_state.local_db, pd.DataFrame([student])], ignore_index=True)
+            else: st.session_state.local_db = pd.concat([st.session_state.local_db, pd.DataFrame([student])], ignore_index=True)
 
 def delete_data(cls, roll):
     if db:
@@ -90,7 +86,7 @@ def delete_data(cls, roll):
 class ResultPDF(FPDF):
     def draw_card(self, data, subs, logo=None):
         self.add_page()
-        self.set_line_width(0.4); self.rect(5, 5, 200, 287); self.set_line_width(0.2); self.rect(7, 7, 196, 283)
+        self.set_line_width(0.5); self.rect(5, 5, 200, 287); self.set_line_width(0.2); self.rect(7, 7, 196, 283)
         if logo:
             try: self.image(logo, 10, 10, 25)
             except: pass
@@ -100,11 +96,11 @@ class ResultPDF(FPDF):
         self.ln(2); self.set_font("Helvetica", 'B', 18); self.set_text_color(70, 130, 180)
         self.cell(190, 10, "STUDENT REPORT CARD", ln=True, align='C'); self.set_text_color(0,0,0)
         self.set_font("Helvetica", 'B', 10); self.cell(190, 8, "Session 2025-2026", ln=True, align='C')
-        self.set_fill_color(220, 230, 245); self.set_font("Helvetica", 'B', 9)
+        self.set_fill_color(225, 235, 245); self.set_font("Helvetica", 'B', 9)
         self.cell(95, 8, f" NAME: {str(data['Name']).upper()}", 1, 0, 'L', True)
         self.cell(95, 8, f" FATHER: {str(data['Father Name']).upper()}", 1, 1, 'L', True)
         self.cell(63, 8, f" CLASS: {data['Class']}", 1, 0, 'L', True); self.cell(64, 8, f" ROLL: {data['Roll No']}", 1, 0, 'L', True); self.cell(63, 8, f" SEC: {data.get('Section','A')}", 1, 1, 'L', True)
-        self.ln(3); self.set_fill_color(60, 60, 60); self.set_text_color(255, 255, 255)
+        self.ln(3); self.set_fill_color(50, 50, 50); self.set_text_color(255, 255, 255)
         self.cell(110, 9, "SUBJECT", 1, 0, 'C', True); self.cell(40, 9, "TOTAL", 1, 0, 'C', True); self.cell(40, 9, "OBTAINED", 1, 1, 'C', True)
         self.set_text_color(0, 0, 0); self.set_font("Helvetica", '', 10)
         go = 0; gm = 0
@@ -112,9 +108,9 @@ class ResultPDF(FPDF):
             o = int(data.get(s, 0)); t = int(data.get(f"Total_{s}", 50)); go += o; gm += t
             self.cell(110, 8, f" {s}", 1); self.cell(40, 8, str(t), 1, 0, 'C'); self.cell(40, 8, str(o), 1, 1, 'C')
         self.set_font("Helvetica", 'B', 10); self.cell(110, 9, " GRAND TOTAL", 1); self.cell(40, 9, str(gm), 1, 0, 'C'); self.cell(40, 9, str(go), 1, 1, 'C')
-        self.ln(4); p = (go/gm*100) if gm > 0 else 0; g, pf = calculate_grade_and_perf(p)
-        self.set_font("Helvetica", 'B', 8); self.cell(47, 10, f"PERC: {p:.1f}%", 1, 0, 'C'); self.cell(47, 10, "POS: ---", 1, 0, 'C'); self.cell(47, 10, f"PERF: {pf}", 1, 0, 'C'); self.cell(49, 10, f"GRADE: {g}", 1, 1, 'C')
-        self.ln(15); self.set_font("Helvetica", 'I', 10); self.multi_cell(190, 6, '"Education is the most powerful weapon which you can use to change the world."\n"The beautiful thing about learning is that no one can take it away from you."', align='C')
+        self.ln(4); p = (go/gm*100) if gm > 0 else 0; grade, perf = calculate_grade_and_perf(p)
+        self.set_font("Helvetica", 'B', 8); self.cell(47, 10, f"PERC: {p:.1f}%", 1, 0, 'C'); self.cell(47, 10, "POS: ---", 1, 0, 'C'); self.cell(47, 10, f"PERF: {perf}", 1, 0, 'C'); self.cell(49, 10, f"GRADE: {grade}", 1, 1, 'C')
+        self.ln(20); self.set_font("Helvetica", 'I', 10); self.multi_cell(190, 6, '"Education is the most powerful weapon which you can use to change the world."\n"The beautiful thing about learning is that no one can take it away from you."', align='C')
         self.ln(15); self.set_font("Helvetica", 'B', 9); self.cell(95, 10, "_______________________", 0, 0, 'C'); self.cell(95, 10, "_______________________", 0, 1, 'C')
         self.cell(95, 5, "CLASS TEACHER", 0, 0, 'C'); self.cell(95, 5, "SENIOR HEAD MASTER (SAFDAR JAVED)", 0, 1, 'C')
         self.ln(5); self.set_font("Helvetica", '', 8); self.cell(190, 10, "Result Date: 31-03-2026", 0, 0, 'R')
@@ -137,19 +133,15 @@ with st.sidebar:
             if pw == "ghs123": st.session_state.auth = True; st.rerun()
             else: st.error("Wrong Key")
         st.stop()
-    if st.button("Debug Secrets"):
-        st.write("Has 'firebase' key:", "firebase" in st.secrets)
-        if "firebase" in st.secrets: st.write("Has 'textkey':", "textkey" in st.secrets["firebase"])
-        if "fb_error" in st.session_state: st.write("Error:", st.session_state.fb_error)
     if st.button("Logout"): st.session_state.clear(); st.rerun()
 
 df = get_data(); fil = df[df["Class"] == cl]
 t1, t2, t3 = st.tabs(["🖊️ Marks", "📋 Directory", "🖨️ Print"])
 
 with t1:
-    if fil.empty: st.info("Add students first.")
+    if fil.empty: st.info("No students found.")
     else:
-        sn = st.selectbox("Student", fil["Name"].unique())
+        sn = st.selectbox("Select Student", fil["Name"].unique())
         sd = fil[fil["Name"] == sn].iloc[0].to_dict()
         with st.form("mf"):
             for s in sel:
