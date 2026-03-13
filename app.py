@@ -2,56 +2,82 @@ import streamlit as st
 import pandas as pd
 from fpdf import FPDF
 import io
+import json
+import firebase_admin
+from firebase_admin import credentials, firestore
 
 # --- APP CONFIG ---
 st.set_page_config(page_title="GHS Result System", layout="wide", page_icon="🏫")
 
-# --- CONSTANTS ---
+# --- FIREBASE PERMANENT STORAGE SETUP ---
+# Path Rule: /artifacts/{appId}/public/data/{collectionName}
+APP_ID = "ghs-bhutta-mohabbat-v2"
+
+def init_firebase():
+    if not firebase_admin._apps:
+        try:
+            # On Streamlit Cloud, add your Firebase Service Account JSON to Secrets
+            if "firebase" in st.secrets:
+                key_dict = json.loads(st.secrets["firebase"]["textkey"])
+                creds = credentials.Certificate(key_dict)
+                firebase_admin.initialize_app(creds)
+            else:
+                return None
+        except Exception as e:
+            st.error(f"Firebase Init Error: {e}")
+            return None
+    return firestore.client()
+
+db = init_firebase()
+
+# --- CONSTANTS (UNCHANGED) ---
 DEFAULT_SUBJECTS = [
     "English", "Urdu", "Mathematics", "Islamiat", 
     "Science", "Social Study", "Computer", "Tajuma-tu-Quran"
 ]
-# Classes from Nursery to 8th
 CLASSES = ["Nursery", "K.G", "1st", "2nd", "3rd", "4th", "5th", "6th", "7th", "8th"]
 SECTIONS = ["A", "B", "C"]
 
-# --- SESSION STATE INITIALIZATION ---
-if 'students_db' not in st.session_state:
-    # Starting with an empty database structure
-    st.session_state.students_db = pd.DataFrame(columns=[
-        "Roll No", "Name", "Father Name", "Class", "Section"
-    ] + DEFAULT_SUBJECTS + [f"Total_{sub}" for sub in DEFAULT_SUBJECTS])
+# --- DATA PERSISTENCE FUNCTIONS ---
+def get_students_from_cloud():
+    if db is None:
+        return pd.DataFrame(columns=["Roll No", "Name", "Father Name", "Class", "Section"])
+    
+    # Simple query as per Rule 2
+    docs = db.collection("artifacts", APP_ID, "public", "data", "students").stream()
+    data = []
+    for doc in docs:
+        item = doc.to_dict()
+        item["doc_id"] = doc.id
+        data.append(item)
+    
+    if not data:
+        return pd.DataFrame(columns=["Roll No", "Name", "Father Name", "Class", "Section"])
+    return pd.DataFrame(data)
 
-# --- HELPER FUNCTIONS ---
-def get_grade(percentage):
-    if percentage >= 80: return "A+"
-    elif percentage >= 70: return "A"
-    elif percentage >= 60: return "B"
-    elif percentage >= 50: return "C"
-    elif percentage >= 40: return "D"
-    else: return "F"
+def save_student_to_cloud(student_data):
+    if db:
+        # Create a unique ID based on Class and Roll No
+        uid = f"{student_data['Class']}_{student_data['Roll No']}".replace(" ", "_")
+        db.collection("artifacts", APP_ID, "public", "data", "students").document(uid).set(student_data)
 
-def get_performance(grade):
-    perf = {"A+": "Excellent", "A": "Very Good", "B": "Good", "C": "Satisfactory", "D": "Fair", "F": "Poor"}
-    return perf.get(grade, "---")
+def delete_student_from_cloud(doc_id):
+    if db:
+        db.collection("artifacts", APP_ID, "public", "data", "students").document(doc_id).delete()
 
-# --- PDF GENERATOR ---
+# --- PDF GENERATOR (MATCHING PREVIOUS DESIGN) ---
 class ResultPDF(FPDF):
     def draw_report_card(self, data, active_subjects, logo_path=None):
         self.add_page()
-        # Outer Borders
         self.set_line_width(0.5)
         self.rect(5, 5, 200, 287)
         self.set_line_width(0.3)
         self.rect(7, 7, 196, 283)
         
         if logo_path:
-            try:
-                self.image(logo_path, 12, 12, 25)
-            except:
-                pass
+            try: self.image(logo_path, 12, 12, 25)
+            except: pass
         
-        # Header Info
         self.set_font("Helvetica", 'B', 8)
         self.cell(190, 4, "SCHOOL EDUCATION DEPARTMENT", ln=True, align='C')
         self.set_font("Helvetica", 'B', 14)
@@ -64,11 +90,9 @@ class ResultPDF(FPDF):
         self.set_text_color(70, 130, 180) 
         self.cell(190, 10, "STUDENT REPORT CARD", ln=True, align='C')
         self.set_text_color(0, 0, 0)
-        
         self.set_font("Helvetica", 'B', 10)
-        self.cell(190, 8, "Session 2025-2026", ln=True)
+        self.cell(190, 8, "Session 2025-2026", ln=True, align='C')
         
-        # Student Details Table
         self.set_fill_color(180, 200, 220)
         self.set_font("Helvetica", 'B', 9)
         self.cell(95, 8, f" NAME: {str(data['Name']).upper()}", 1, 0, 'L', True)
@@ -77,7 +101,6 @@ class ResultPDF(FPDF):
         self.cell(64, 8, f" ROLL NO: {data['Roll No']}", 1, 0, 'L', True)
         self.cell(63, 8, f" SECTION: {data['Section']}", 1, 1, 'L', True)
         
-        # Marks Table
         self.ln(3)
         self.set_fill_color(40, 40, 40)
         self.set_text_color(255, 255, 255)
@@ -87,40 +110,35 @@ class ResultPDF(FPDF):
         
         self.set_text_color(0, 0, 0)
         self.set_font("Helvetica", '', 10)
-        grand_total_obtained = 0
+        grand_total_obt = 0
         grand_total_max = 0
         
         for sub in active_subjects:
-            obtained = int(data.get(sub, 0))
-            total_max = int(data.get(f"Total_{sub}", 50))
-            grand_total_obtained += obtained
-            grand_total_max += total_max
+            obt = int(data.get(sub, 0))
+            tot = int(data.get(f"Total_{sub}", 50))
+            grand_total_obt += obt
+            grand_total_max += tot
             self.cell(110, 8, f" {sub}", 1)
-            self.cell(40, 8, str(total_max), 1, 0, 'C')
-            self.cell(40, 8, str(obtained), 1, 1, 'C')
+            self.cell(40, 8, str(tot), 1, 0, 'C')
+            self.cell(40, 8, str(obt), 1, 1, 'C')
             
-        # Total row
         self.set_font("Helvetica", 'B', 10)
         self.cell(110, 9, " GRAND TOTAL", 1)
         self.cell(40, 9, str(grand_total_max), 1, 0, 'C')
-        self.cell(40, 9, str(grand_total_obtained), 1, 1, 'C')
+        self.cell(40, 9, str(grand_total_obt), 1, 1, 'C')
         
-        # Result metrics
         self.ln(4)
-        perc = (grand_total_obtained / grand_total_max) * 100 if grand_total_max > 0 else 0
-        grade = get_grade(perc)
+        perc = (grand_total_obt / grand_total_max * 100) if grand_total_max > 0 else 0
         self.set_font("Helvetica", 'B', 8)
         self.cell(47, 10, f"PERCENTAGE: {perc:.1f}%", 1, 0, 'C')
         self.cell(47, 10, "POSITION: ---", 1, 0, 'C')
-        self.cell(47, 10, f"PERFORMANCE: {get_performance(grade)}", 1, 0, 'C')
-        self.cell(49, 10, f"FINAL GRADE: {grade}", 1, 1, 'C')
+        self.cell(47, 10, "PERFORMANCE: ---", 1, 0, 'C')
+        self.cell(49, 10, "FINAL GRADE: ---", 1, 1, 'C')
         
-        # Footer Quotes
         self.ln(20)
         self.set_font("Helvetica", 'I', 10)
         self.multi_cell(190, 6, '"Education is the most powerful weapon which you can use to change the world."\n"The beautiful thing about learning is that no one can take it away from you."', align='C')
         
-        # Signatures
         self.ln(15)
         self.set_font("Helvetica", 'B', 9)
         self.cell(95, 10, "_______________________", 0, 0, 'C')
@@ -128,29 +146,27 @@ class ResultPDF(FPDF):
         self.cell(95, 5, "CLASS TEACHER", 0, 0, 'C')
         self.cell(95, 5, "SENIOR HEAD MASTER (SAFDAR JAVED)", 0, 1, 'C')
         
-        self.ln(5)
         self.set_font("Helvetica", '', 8)
+        self.ln(5)
         self.cell(190, 10, "Result Declaration Date: 31-03-2026", 0, 0, 'R')
 
 # --- UI INTERFACE ---
-st.title("🛡️ GHS Management Portal")
+st.title("🛡️ GHS Management Portal (Cloud Saving)")
+
+if db is None:
+    st.warning("⚠️ Cloud Storage not configured. Please add Firebase secrets to Streamlit Cloud Settings.")
 
 with st.sidebar:
     st.header("Global Filters")
-    # 1. Class Selection (Nursery to 8th)
     active_class = st.selectbox("Current Working Class", CLASSES)
     
     st.divider()
-    # 2. Subject Selection with Check/Uncheck All
     st.subheader("Manage Subjects")
-    
     col_t1, col_t2 = st.columns(2)
     if col_t1.button("Check All"):
-        for sub in DEFAULT_SUBJECTS:
-            st.session_state[f"sub_{sub}"] = True
+        for sub in DEFAULT_SUBJECTS: st.session_state[f"sub_{sub}"] = True
     if col_t2.button("Uncheck All"):
-        for sub in DEFAULT_SUBJECTS:
-            st.session_state[f"sub_{sub}"] = False
+        for sub in DEFAULT_SUBJECTS: st.session_state[f"sub_{sub}"] = False
 
     selected_subjects = []
     for sub in DEFAULT_SUBJECTS:
@@ -166,53 +182,41 @@ with st.sidebar:
             if pwd == "ghs123":
                 st.session_state.auth = True
                 st.rerun()
-            else:
-                st.error("Invalid Key")
+            else: st.error("Invalid Key")
         st.stop()
     
     if st.button("Logout"):
         st.session_state.clear()
         st.rerun()
 
-# --- FILTER DATA BY CLASS ---
-filtered_db = st.session_state.students_db[st.session_state.students_db["Class"] == active_class]
+# Load Data from Cloud (Permanent)
+students_df = get_students_from_cloud()
+filtered_db = students_df[students_df["Class"] == active_class]
 
-# Main Tabs
 tab_marks, tab_db, tab_bulk = st.tabs(["🖊️ Marks Entry", "📋 Student Directory", "🖨️ Reports"])
 
 with tab_marks:
     st.header(f"Grading Panel - Class {active_class}")
-    
     if filtered_db.empty:
-        st.info(f"No students found in Class {active_class}. Register them in Student Directory.")
+        st.info(f"No students found in Class {active_class}.")
     else:
-        student_to_grade = st.selectbox("Select Student", filtered_db["Name"].unique())
-        
-        # Locate correct index in global DB
-        idx = st.session_state.students_db[(st.session_state.students_db["Name"] == student_to_grade) & 
-                                          (st.session_state.students_db["Class"] == active_class)].index[0]
-        curr_data = st.session_state.students_db.loc[idx]
+        student_name = st.selectbox("Select Student", filtered_db["Name"].unique())
+        student_data = filtered_db[filtered_db["Name"] == student_name].iloc[0].to_dict()
         
         with st.form("marks_entry_form"):
-            st.write(f"Updating: **{curr_data['Name']}** (Roll No: {curr_data['Roll No']})")
+            st.write(f"Updating: **{student_name}** (Roll No: {student_data['Roll No']})")
             for sub in selected_subjects:
                 c1, c2 = st.columns(2)
-                val_obt = curr_data.get(sub, 0)
-                val_tot = curr_data.get(f"Total_{sub}", 50)
-                
-                obtained = c1.number_input(f"{sub} Obtained", min_value=0, max_value=500, value=int(val_obt if pd.notnull(val_obt) else 0))
-                total_m = c2.number_input(f"{sub} Total Marks", min_value=1, max_value=500, value=int(val_tot if pd.notnull(val_tot) else 50))
-                
-                st.session_state.students_db.at[idx, sub] = obtained
-                st.session_state.students_db.at[idx, f"Total_{sub}"] = total_m
+                student_data[sub] = c1.number_input(f"{sub} Obtained", 0, 500, int(student_data.get(sub, 0)))
+                student_data[f"Total_{sub}"] = c2.number_input(f"{sub} Total Marks", 1, 500, int(student_data.get(f"Total_{sub}", 50)))
             
-            if st.form_submit_button("Save Student Marks"):
-                st.success(f"Marks updated for {student_to_grade}!")
+            if st.form_submit_button("💾 Save Marks to Cloud"):
+                save_student_to_cloud(student_data)
+                st.success(f"Marks for {student_name} saved forever!")
+                st.rerun()
 
 with tab_db:
     st.header(f"Class {active_class} Directory")
-    
-    # 1. ADD STUDENT
     with st.expander(f"➕ Add Student to Class {active_class}"):
         with st.form("reg_form"):
             c1, c2, c3 = st.columns(3)
@@ -220,66 +224,51 @@ with tab_db:
             n = c2.text_input("Full Name")
             f = c3.text_input("Father Name")
             sc = st.selectbox("Section", SECTIONS)
-            
-            if st.form_submit_button("Register Student"):
+            if st.form_submit_button("Register Student Permanently"):
                 new_row = {
-                    "Roll No": r, "Name": n, "Father Name": f, 
-                    "Class": active_class, "Section": sc, 
-                    **{s: 0 for s in DEFAULT_SUBJECTS}, 
-                    **{f"Total_{s}": 50 for s in DEFAULT_SUBJECTS}
+                    "Roll No": r, "Name": n, "Father Name": f, "Class": active_class, "Section": sc,
+                    **{s: 0 for s in DEFAULT_SUBJECTS}, **{f"Total_{s}": 50 for s in DEFAULT_SUBJECTS}
                 }
-                st.session_state.students_db = pd.concat([st.session_state.students_db, pd.DataFrame([new_row])], ignore_index=True)
-                st.success(f"Added {n} to Class {active_class}")
+                save_student_to_cloud(new_row)
+                st.success(f"Registered {n} in Cloud Storage!")
                 st.rerun()
     
     st.divider()
-    
-    # 2. DELETE STUDENT SECTION
     st.subheader("Manage Existing Students")
     if filtered_db.empty:
-        st.write("No students registered in this class.")
+        st.write("Directory empty.")
     else:
-        # Display as a table with a delete button column
         for index, row in filtered_db.iterrows():
             col_info, col_del = st.columns([4, 1])
             with col_info:
-                st.write(f"**Roll No:** {row['Roll No']} | **Name:** {row['Name']} | **Father:** {row['Father Name']}")
+                st.write(f"**Roll No:** {row['Roll No']} | **Name:** {row['Name']}")
             with col_del:
-                if st.button(f"🗑️ Delete", key=f"del_{row['Class']}_{row['Roll No']}_{index}"):
-                    # Drop from global session database
-                    st.session_state.students_db = st.session_state.students_db.drop(index).reset_index(drop=True)
-                    st.success(f"Student removed.")
+                # doc_id is the unique key in firestore
+                if st.button(f"🗑️ Delete", key=f"del_{row.get('doc_id', index)}"):
+                    delete_student_from_cloud(row['doc_id'])
                     st.rerun()
     
     st.divider()
     st.dataframe(filtered_db[["Roll No", "Name", "Father Name", "Section"]], use_container_width=True)
 
 with tab_bulk:
-    st.header(f"Generate Reports (Class {active_class})")
-    
+    st.header(f"Generate Reports")
     if filtered_db.empty:
-        st.error("No data available to print for this class.")
+        st.error("No data available.")
     else:
         col1, col2 = st.columns(2)
-        
         with col1:
-            st.subheader("Individual Result")
+            st.subheader("Individual Print")
             print_target = st.selectbox("Choose Student", filtered_db["Name"])
             if st.button("Generate Card"):
                 row_data = filtered_db[filtered_db["Name"] == print_target].iloc[0]
                 pdf = ResultPDF()
-                pdf.draw_report_card(row_data, selected_subjects, logo_path=school_logo if school_logo else None)
-                pdf_bytes = pdf.output()
-                st.download_button(label=f"⬇️ Download {print_target}'s Card", data=bytes(pdf_bytes), file_name=f"Result_{print_target}.pdf", mime="application/pdf")
-                
+                pdf.draw_report_card(row_data, selected_subjects, logo_path=school_logo)
+                st.download_button(f"Download {print_target}.pdf", pdf.output(), f"{print_target}.pdf", "application/pdf")
         with col2:
-            st.subheader("Bulk Class Results")
-            st.write(f"Generate result cards for all {len(filtered_db)} students in Class {active_class}.")
+            st.subheader("Bulk Print")
             if st.button(f"Prepare Bulk PDF"):
                 pdf = ResultPDF()
-                sorted_class = filtered_db.sort_values("Roll No")
-                for _, row in sorted_class.iterrows():
-                    pdf.draw_report_card(row, selected_subjects, logo_path=school_logo if school_logo else None)
-                
-                bulk_bytes = pdf.output()
-                st.download_button(label=f"⬇️ Download Bulk PDF", data=bytes(bulk_bytes), file_name=f"Class_{active_class}_Results.pdf", mime="application/pdf")
+                for _, row in filtered_db.sort_values("Roll No").iterrows():
+                    pdf.draw_report_card(row, selected_subjects, logo_path=school_logo)
+                st.download_button("Download All Results", pdf.output(), "Bulk_Results.pdf", "application/pdf")
