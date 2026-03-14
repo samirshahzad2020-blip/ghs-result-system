@@ -14,18 +14,21 @@ def init_db():
     if not firebase_admin._apps:
         try:
             if "firebase" in st.secrets:
+                # Load the JSON from secrets and fix the private key format
                 key_dict = json.loads(st.secrets["firebase"]["textkey"])
                 if "private_key" in key_dict:
                     key_dict["private_key"] = key_dict["private_key"].replace("\\n", "\n")
+                
                 creds = credentials.Certificate(key_dict)
                 firebase_admin.initialize_app(creds)
                 return firestore.client()
-        except: return None
+        except Exception:
+            return None
     return firestore.client()
 
 db = init_db()
-# Cloud Path for Permanent Data
-COL_PATH = ["artifacts", "ghs-bhutta-mohabbat", "public", "data", "students"]
+# Permanent Storage Path
+COL_PATH = ["artifacts", "ghs-bhutta-mohabbat-v8", "public", "data", "students"]
 
 # --- CONSTANTS ---
 CLASSES = ["Nursery", "K.G", "1st", "2nd", "3rd", "4th", "5th", "6th", "7th", "8th"]
@@ -33,7 +36,7 @@ SECTIONS = ["A", "B"]
 SUBJECTS = ["English", "Urdu", "Mathematics", "Islamiat", "Science", "Social Study", "Computer", "Tajuma-tu-Quran"]
 
 def get_grade_perf(p):
-    """Returns (Grade, Performance) based on percentage"""
+    """Returns (Grade, Performance) - EXACTLY 2 VALUES"""
     if p >= 80: return "A+", "Excellent"
     elif p >= 70: return "A", "Very Good"
     elif p >= 60: return "B", "Good"
@@ -53,7 +56,7 @@ def get_students():
 def save_student(data):
     if db:
         try:
-            # Added Section to UID to prevent mixups
+            # ID including Section to prevent mixups
             uid = f"{data['Class']}_{data['Section']}_{data['Roll No']}".replace(" ", "_")
             db.collection(*COL_PATH).document(uid).set(data)
             return True
@@ -77,64 +80,45 @@ def delete_student(cls, sec, roll):
 class ResultPDF(FPDF):
     def draw(self, d, subs, logo):
         self.add_page()
-        # Page Borders
         self.set_line_width(0.5); self.rect(5, 5, 200, 287); self.set_line_width(0.2); self.rect(7, 7, 196, 283)
         if logo:
             try: self.image(logo, 10, 10, 25)
             except: pass
-        
-        # Header Info
         self.set_font("Helvetica", 'B', 8); self.cell(190, 4, "SCHOOL EDUCATION DEPARTMENT", ln=True, align='C')
         self.set_font("Helvetica", 'B', 14); self.cell(190, 7, "GOVT. HIGH SCHOOL BHUTTA MOHABBAT", ln=True, align='C')
         self.set_font("Helvetica", 'B', 9); self.cell(190, 5, "EMIS CODE: 39310025 | DISTRICT OKARA", ln=True, align='C')
         self.ln(2); self.set_font("Helvetica", 'B', 18); self.set_text_color(70, 130, 180); self.cell(190, 10, "STUDENT REPORT CARD", ln=True, align='C')
         self.set_text_color(0,0,0); self.set_font("Helvetica", 'B', 10); self.cell(190, 8, "Session 2025-2026", ln=True, align='C')
-        
-        # Student Info Box
         self.set_fill_color(220, 230, 245); self.set_font("Helvetica", 'B', 9)
         self.cell(95, 8, f" NAME: {str(d['Name']).upper()}", 1, 0, 'L', True); self.cell(95, 8, f" FATHER: {str(d['Father Name']).upper()}", 1, 1, 'L', True)
         self.cell(63, 8, f" CLASS: {d['Class']}", 1, 0, 'L', True); self.cell(64, 8, f" SECTION: {d.get('Section','A')}", 1, 0, 'L', True); self.cell(63, 8, f" ROLL NO: {d['Roll No']}", 1, 1, 'L', True)
-        
-        # Table Header
-        self.ln(3); self.set_fill_color(50, 50, 50); self.set_text_color(255, 255, 255); 
-        self.cell(110, 9, "SUBJECT", 1, 0, 'C', True); self.cell(40, 9, "TOTAL", 1, 0, 'C', True); self.cell(40, 9, "OBTAINED", 1, 1, 'C', True)
+        self.ln(3); self.set_fill_color(50, 50, 50); self.set_text_color(255, 255, 255); self.cell(110, 9, "SUBJECT", 1, 0, 'C', True); self.cell(40, 9, "TOTAL", 1, 0, 'C', True); self.cell(40, 9, "OBTAINED", 1, 1, 'C', True)
         self.set_text_color(0, 0, 0); self.set_font("Helvetica", '', 10)
-        
-        # Marks Rows
         obt_t, max_t = 0, 0
         for s in subs:
             o, t = int(d.get(s, 0)), int(d.get(f"Total_{s}", 50)); obt_t += o; max_t += t
             self.cell(110, 8, f" {s}", 1); self.cell(40, 8, str(t), 1, 0, 'C'); self.cell(40, 8, str(o), 1, 1, 'C')
-        
-        # Grand Total
         self.set_font("Helvetica", 'B', 10); self.cell(110, 9, " GRAND TOTAL", 1); self.cell(40, 9, str(max_t), 1, 0, 'C'); self.cell(40, 9, str(obt_t), 1, 1, 'C')
-        
-        # Metrics Calculation
         self.ln(4)
-        perc = (obt_t / max_t * 100) if max_t > 0 else 0
-        grade, perf = get_grade_perf(perc)
         
-        self.set_font("Helvetica", 'B', 8)
-        self.cell(47, 10, f"PERC: {perc:.1f}%", 1, 0, 'C')
-        self.cell(47, 10, "POS: ---", 1, 0, 'C')
-        self.cell(47, 10, f"PERF: {perf}", 1, 0, 'C')
-        self.cell(49, 10, f"GRADE: {grade}", 1, 1, 'C')
+        # --- FIXED UNPACKING ERROR HERE ---
+        p = (obt_t / max_t * 100) if max_t > 0 else 0
+        grade, perf = get_grade_perf(p) 
         
-        # Footer Area
-        self.ln(15); self.set_font("Helvetica", 'I', 10); 
-        self.multi_cell(190, 6, '"Education is the most powerful weapon which you can use to change the world."\n"The beautiful thing about learning is that no one can take it away from you."', align='C')
+        self.set_font("Helvetica", 'B', 8); self.cell(47, 10, f"PERC: {p:.1f}%", 1, 0, 'C'); self.cell(47, 10, "POS: ---", 1, 0, 'C'); self.cell(47, 10, f"PERF: {perf}", 1, 0, 'C'); self.cell(49, 10, f"GRADE: {grade}", 1, 1, 'C')
+        self.ln(15); self.set_font("Helvetica", 'I', 10); self.multi_cell(190, 6, '"Education is the most powerful weapon which you can use to change the world."\n"The beautiful thing about learning is that no one can take it away from you."', align='C')
         self.ln(15); self.set_font("Helvetica", 'B', 9); self.cell(95, 10, "_______________________", 0, 0, 'C'); self.cell(95, 10, "_______________________", 0, 1, 'C')
         self.cell(95, 5, "CLASS TEACHER", 0, 0, 'C'); self.cell(95, 5, "SENIOR HEAD MASTER (SAFDAR JAVED)", 0, 1, 'C')
         self.ln(5); self.set_font("Helvetica", '', 8); self.cell(190, 10, "Result Date: 31-03-2026", 0, 0, 'R')
 
-# --- MAIN UI ---
+# --- UI ---
 if db: st.success("🟢 Permanent Cloud Storage Active")
-else: st.warning("🔴 Temporary Mode (Update Secrets)")
+else: st.warning("🔴 Temporary Mode (Secrets update karein)")
 
 with st.sidebar:
     st.header("School Division")
-    cl = st.selectbox("Current Class", CLASSES)
-    sec = st.selectbox("Section", SECTIONS)
+    cl = st.selectbox("Select Class", CLASSES)
+    sc = st.selectbox("Select Section", SECTIONS)
     st.divider()
     if st.button("Check All"): 
         for s in SUBJECTS: st.session_state[f"s_{s}"] = True
@@ -143,59 +127,59 @@ with st.sidebar:
     sel = [s for s in SUBJECTS if st.checkbox(s, value=st.session_state.get(f"s_{s}", True), key=f"s_{s}")]
     st.divider(); logo = st.file_uploader("Logo", type=['png', 'jpg'])
     if 'auth' not in st.session_state:
-        pw = st.text_input("Key", type="password")
+        pw = st.text_input("Login Key", type="password")
         if st.button("Login"):
             if pw == "ghs123": st.session_state.auth = True; st.rerun()
             else: st.error("Wrong Key")
         st.stop()
     if st.button("Logout"): st.session_state.clear(); st.rerun()
 
+# --- MAIN APP ---
 df = get_students()
-# Filtering by both Class and Section
 if not df.empty:
-    fil = df[(df["Class"] == cl) & (df["Section"] == sec)]
+    fil = df[(df["Class"] == cl) & (df["Section"] == sc)]
 else:
     fil = pd.DataFrame()
 
-t1, t2, t3 = st.tabs(["🖊️ Marks Entry", "📋 Directory", "🖨️ Print Results"])
+t1, t2, t3 = st.tabs(["🖊️ Marks Entry", "📋 Student Directory", "🖨️ Print Results"])
 
 with t1:
-    if fil.empty: st.info(f"Class {cl} Section {sec} mein koi student nahi hai.")
+    if fil.empty: st.info(f"Class {cl} - Section {sc} mein koi student nahi hai.")
     else:
         sn = st.selectbox("Select Student", fil["Name"].unique())
         sd = fil[fil["Name"] == sn].iloc[0].to_dict()
         with st.form("marks_form"):
-            st.write(f"Marks for: **{sn}** (Sec {sec})")
+            st.write(f"Marks for: **{sn}** ({cl} - {sc})")
             for s in sel:
                 c1, c2 = st.columns(2)
                 sd[s] = c1.number_input(f"{s} Obtained", 0, 500, int(sd.get(s, 0)))
                 sd[f"Total_{s}"] = c2.number_input(f"{s} Total", 1, 500, int(sd.get(f"Total_{s}", 50)))
-            if st.form_submit_button("Save Marks"):
-                if save_student(sd): st.success("Saved to Cloud!"); st.rerun()
+            if st.form_submit_button("Save Marks Permanently"):
+                if save_student(sd): st.success("Cloud mein save ho gaya!"); st.rerun()
 
 with t2:
-    with st.expander(f"Add Student to {cl} (Section {sec})"):
+    with st.expander(f"Add Student to {cl} - Section {sc}"):
         with st.form("add_form"):
-            r, n, f = st.columns(3); roll = r.number_input("Roll No", 1); name = n.text_input("Name"); fat = f.text_input("Father Name")
+            r, n, f = st.columns(3); roll = r.number_input("Roll No", 1); name = n.text_input("Full Name"); fat = f.text_input("Father Name")
             if st.form_submit_button("Register"):
-                save_student({"Roll No": roll, "Name": name, "Father Name": fat, "Class": cl, "Section": sec, **{s: 0 for s in SUBJECTS}, **{f"Total_{s}": 50 for s in SUBJECTS}})
-                st.rerun()
+                save_student({"Roll No": roll, "Name": name, "Father Name": fat, "Class": cl, "Section": sc, **{s: 0 for s in SUBJECTS}, **{f"Total_{s}": 50 for s in SUBJECTS}})
+                st.success("Registered!"); st.rerun()
     if not fil.empty:
-        st.write(f"Students in {cl} - {sec}:")
+        st.write("Current Students:")
         for i, row in fil.sort_values("Roll No").iterrows():
             c1, c2 = st.columns([5, 1])
             c1.write(f"**Roll {row['Roll No']}**: {row['Name']}")
-            if c2.button("🗑️", key=f"del_{cl}_{sec}_{row['Roll No']}"):
-                delete_student(cl, sec, row['Roll No']); st.rerun()
+            if c2.button("🗑️ Delete", key=f"del_{cl}_{sc}_{row['Roll No']}"):
+                delete_student(cl, sc, row['Roll No']); st.rerun()
 
 with t3:
-    if fil.empty: st.error(f"Class {cl} Section {sec} mein koi data nahi hai.")
+    if fil.empty: st.error("No data available.")
     else:
         pn = st.selectbox("Select Student", fil["Name"].unique())
-        if st.button("Generate Single"):
+        if st.button("Generate Card"):
             pdf = ResultPDF(); pdf.draw(fil[fil["Name"] == pn].iloc[0], sel, logo)
             st.download_button(f"Download {pn}.pdf", bytes(pdf.output()), f"{pn}.pdf", "application/pdf")
         if st.button("Bulk PDF"):
             pdf = ResultPDF()
             for _, r in fil.sort_values("Roll No").iterrows(): pdf.draw(r, sel, logo)
-            st.download_button("Download Bulk", bytes(pdf.output()), f"Class_{cl}_{sec}_Results.pdf", "application/pdf")
+            st.download_button("Download Bulk", bytes(pdf.output()), f"Class_{cl}_{sc}_Results.pdf", "application/pdf")
