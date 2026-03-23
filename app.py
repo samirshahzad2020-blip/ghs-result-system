@@ -24,7 +24,7 @@ def init_db():
     return firestore.client()
 
 db = init_db()
-# Cloud Path remains exactly the same to protect your data
+# Cloud Path: artifacts/ghs-bhutta-mohabbat/public/data/students
 COL_PATH = ["artifacts", "ghs-bhutta-mohabbat-v10", "public", "data", "students"]
 
 # --- CONSTANTS ---
@@ -53,6 +53,7 @@ def get_students():
 def save_student(data):
     if db:
         try:
+            # Unique ID including Class and Section to prevent mixups
             uid = f"{data['Class']}_{data['Section']}_{data['Roll No']}".replace(" ", "_")
             db.collection(*COL_PATH).document(uid).set(data)
             return True
@@ -72,7 +73,7 @@ def delete_student(cls, sec, roll):
         if 'local_db' in st.session_state:
             st.session_state.local_db = st.session_state.local_db[~((st.session_state.local_db['Class']==cls) & (st.session_state.local_db['Section']==sec) & (st.session_state.local_db['Roll No']==roll))]
 
-# --- PDF ENGINES ---
+# --- PDF ENGINE ---
 class ResultPDF(FPDF):
     def draw(self, d, subs, logo):
         self.add_page()
@@ -107,7 +108,7 @@ class ResultPDF(FPDF):
         grade, perf = get_grade_perf(perc)
         
         self.set_font("Helvetica", 'B', 8)
-        self.cell(47, 10, f"PERC: {perc:.1f}%", 1, 0, 'C'); self.cell(47, 10, f"POS: {d.get('Position', '---')}", 1, 0, 'C')
+        self.cell(47, 10, f"PERC: {perc:.1f}%", 1, 0, 'C'); self.cell(47, 10, "POS: ---", 1, 0, 'C')
         self.cell(47, 10, f"PERF: {perf}", 1, 0, 'C'); self.cell(49, 10, f"GRADE: {grade}", 1, 1, 'C')
         
         self.ln(15); self.set_font("Helvetica", 'I', 10); 
@@ -115,31 +116,6 @@ class ResultPDF(FPDF):
         self.ln(15); self.set_font("Helvetica", 'B', 9); self.cell(95, 10, "_______________________", 0, 0, 'C'); self.cell(95, 10, "_______________________", 0, 1, 'C')
         self.cell(95, 5, "CLASS TEACHER", 0, 0, 'C'); self.cell(95, 5, "SENIOR HEAD MASTER (SAFDAR JAVED)", 0, 1, 'C')
         self.ln(5); self.set_font("Helvetica", '', 8); self.cell(190, 10, "Result Date: 31-03-2026", 0, 0, 'R')
-
-class AwardListPDF(FPDF):
-    def draw(self, df_data, class_name, section_name):
-        self.add_page()
-        self.set_font("Helvetica", 'B', 14)
-        self.cell(190, 10, "GOVT. HIGH SCHOOL BHUTTA MOHABBAT", ln=True, align='C')
-        self.set_font("Helvetica", 'B', 12)
-        self.cell(190, 8, f"AWARD LIST - CLASS {class_name} ({section_name})", ln=True, align='C')
-        self.ln(5)
-        # Table Headers
-        self.set_fill_color(200, 200, 200)
-        self.set_font("Helvetica", 'B', 10)
-        self.cell(20, 10, "Roll No", 1, 0, 'C', True)
-        self.cell(75, 10, "Student Name", 1, 0, 'C', True)
-        self.cell(35, 10, "Total Marks", 1, 0, 'C', True)
-        self.cell(35, 10, "Percentage", 1, 0, 'C', True)
-        self.cell(25, 10, "Position", 1, 1, 'C', True)
-        
-        self.set_font("Helvetica", '', 10)
-        for _, row in df_data.iterrows():
-            self.cell(20, 8, str(row['Roll No']), 1, 0, 'C')
-            self.cell(75, 8, f" {str(row['Name']).upper()}", 1, 0, 'L')
-            self.cell(35, 8, str(int(row['Total_Obtained'])), 1, 0, 'C')
-            self.cell(35, 8, f"{row['Percentage']:.1f}%", 1, 0, 'C')
-            self.cell(25, 8, str(row['Position']), 1, 1, 'C')
 
 # --- UI INTERFACE ---
 if db: st.success("🟢 Permanent Cloud Storage Active")
@@ -167,18 +143,9 @@ with st.sidebar:
 # --- MAIN APP ---
 df = get_students()
 if not df.empty:
-    fil = df[(df["Class"] == cl) & (df["Section"] == sc)].copy()
+    fil = df[(df["Class"] == cl) & (df["Section"] == sc)]
 else:
     fil = pd.DataFrame()
-
-# Pre-calculate Ranks for the current class
-if not fil.empty:
-    fil['Total_Obtained'] = fil[sel].apply(pd.to_numeric).sum(axis=1)
-    # Assume 50 as total marks per subject for percentage calculation
-    total_max_marks = len(sel) * 50
-    fil['Percentage'] = (fil['Total_Obtained'] / total_max_marks * 100) if total_max_marks > 0 else 0
-    fil['Position'] = fil['Total_Obtained'].rank(ascending=False, method='min').astype(int)
-    fil = fil.sort_values("Roll No")
 
 tab1, tab2, tab3 = st.tabs(["🖊️ Marks Entry", "📋 Student Directory", "🖨️ Print Results"])
 
@@ -186,11 +153,13 @@ with tab1:
     st.header(f"Grading - {cl} ({sc})")
     if fil.empty: st.info(f"Class {cl} Section {sc} empty.")
     else:
+        # UNIQUE KEY for marks selectbox
         sn = st.selectbox("Select Student", fil["Name"].unique(), key="marks_student_select")
         student_row = fil[fil["Name"] == sn].iloc[0].to_dict()
         with st.form(f"marks_form_{cl}_{sc}_{sn}"):
             for s in sel:
                 c1, c2 = st.columns(2)
+                # Unique keys for each number input inside the form
                 student_row[s] = c1.number_input(f"{s} Obtained", 0, 500, int(student_row.get(s, 0)), key=f"obt_{s}_{sn}")
                 student_row[f"Total_{s}"] = c2.number_input(f"{s} Total", 1, 500, int(student_row.get(f"Total_{s}", 50)), key=f"tot_{s}_{sn}")
             if st.form_submit_button("Save Marks Permanently"):
@@ -212,6 +181,7 @@ with tab2:
         for i, row in fil.sort_values("Roll No").iterrows():
             c1, c2 = st.columns([5, 1])
             c1.write(f"**Roll {row['Roll No']}**: {row['Name']}")
+            # UNIQUE KEY for delete button
             if c2.button("🗑️", key=f"del_{cl}_{sc}_{row['Roll No']}"):
                 delete_student(cl, sc, row['Roll No']); st.rerun()
 
@@ -219,23 +189,14 @@ with tab3:
     st.header(f"Print - {cl} ({sc})")
     if fil.empty: st.error("No data.")
     else:
-        c_p1, c_p2 = st.columns(2)
-        with c_p1:
-            st.subheader("Individual Cards")
-            pn = st.selectbox("Select Student", fil["Name"].unique(), key="print_student_select")
-            if st.button("Generate Single Card", key="btn_single_pdf"):
-                pdf = ResultPDF(); pdf.draw(fil[fil["Name"] == pn].iloc[0].to_dict(), sel, logo)
-                st.download_button(f"Download {pn}.pdf", bytes(pdf.output()), f"{pn}.pdf", "application/pdf")
+        # UNIQUE KEY for print selectbox
+        pn = st.selectbox("Select Student", fil["Name"].unique(), key="print_student_select")
+        if st.button("Generate Single Card", key="btn_single_pdf"):
+            pdf = ResultPDF(); pdf.draw(fil[fil["Name"] == pn].iloc[0], sel, logo)
+            st.download_button(f"Download {pn}.pdf", bytes(pdf.output()), f"{pn}.pdf", "application/pdf", key=f"dl_single_{pn}")
         
-        with c_p2:
-            st.subheader("Class Summary")
-            if st.button("Generate Bulk Result PDF", key="btn_bulk_pdf"):
-                pdf = ResultPDF()
-                for _, r in fil.sort_values("Roll No").iterrows(): pdf.draw(r.to_dict(), sel, logo)
-                st.download_button("Download All Results", bytes(pdf.output()), f"Class_{cl}_{sc}_Results.pdf", "application/pdf")
-            
-            st.divider()
-            if st.button("Generate Award List (Gazette)", key="btn_award_list"):
-                pdf_aw = AwardListPDF()
-                pdf_aw.draw(fil, cl, sc)
-                st.download_button(f"Download_Award_List_{cl}_{sc}.pdf", bytes(pdf_aw.output()), f"AwardList_{cl}_{sc}.pdf", "application/pdf")
+        st.divider()
+        if st.button("Generate Bulk PDF", key="btn_bulk_pdf"):
+            pdf = ResultPDF()
+            for _, r in fil.sort_values("Roll No").iterrows(): pdf.draw(r, sel, logo)
+            st.download_button("Download All Results", bytes(pdf.output()), f"Class_{cl}_{sc}_Results.pdf", "application/pdf", key="dl_bulk_all")
