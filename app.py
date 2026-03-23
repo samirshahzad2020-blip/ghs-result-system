@@ -24,7 +24,6 @@ def init_db():
     return firestore.client()
 
 db = init_db()
-# Path bilkul wahi hai jo aapne sab se pehle diya tha
 COL_PATH = ["artifacts", "ghs-bhutta-mohabbat-v10", "public", "data", "students"]
 
 # --- CONSTANTS ---
@@ -45,11 +44,17 @@ def get_students():
     if db:
         try:
             docs = list(db.collection(*COL_PATH).stream())
-            return pd.DataFrame([doc.to_dict() for doc in docs]) if docs else pd.DataFrame()
+            if docs:
+                return pd.DataFrame([doc.to_dict() for doc in docs])
+            else:
+                return pd.DataFrame(columns=["Roll No", "Name", "Father Name", "Class", "Section"] + SUBJECTS)
         except Exception as e:
-            st.error(f"Data load nahi ho raha: {e}")
-            return pd.DataFrame()
-    return st.session_state.get('local_db', pd.DataFrame())
+            if "429" in str(e):
+                st.error("Google Database ki aaj ki limit (Quota) khatam ho gayi hai. Kal dobara chalay ga.")
+            else:
+                st.error(f"Data load nahi ho raha: {e}")
+            return pd.DataFrame(columns=["Roll No", "Name", "Father Name", "Class", "Section"] + SUBJECTS)
+    return st.session_state.get('local_db', pd.DataFrame(columns=["Roll No", "Name", "Father Name", "Class", "Section"] + SUBJECTS))
 
 def save_student(data):
     if db:
@@ -58,12 +63,9 @@ def save_student(data):
             db.collection(*COL_PATH).document(uid).set(data)
             return True
         except Exception as e:
-            st.error(f"Save karne mein masla: {e}")
+            st.error(f"Save nahi ho saka (Quota exceeded or Error): {e}")
             return False
-    else:
-        if 'local_db' not in st.session_state: st.session_state.local_db = pd.DataFrame()
-        st.session_state.local_db = pd.concat([st.session_state.local_db, pd.DataFrame([data])]).drop_duplicates(['Class', 'Section', 'Roll No'], keep='last')
-        return True
+    return False
 
 def delete_student(cls, sec, roll):
     if db:
@@ -71,9 +73,6 @@ def delete_student(cls, sec, roll):
             uid = f"{cls}_{sec}_{roll}".replace(" ", "_")
             db.collection(*COL_PATH).document(uid).delete()
         except: pass
-    else:
-        if 'local_db' in st.session_state:
-            st.session_state.local_db = st.session_state.local_db[~((st.session_state.local_db['Class']==cls) & (st.session_state.local_db['Section']==sec) & (st.session_state.local_db['Roll No']==roll))]
 
 # --- PDF ENGINES ---
 class ResultPDF(FPDF):
@@ -83,11 +82,8 @@ class ResultPDF(FPDF):
         if logo:
             try: self.image(logo, 10, 10, 25)
             except: pass
-        self.set_font("Helvetica", 'B', 8); self.cell(190, 4, "SCHOOL EDUCATION DEPARTMENT", ln=True, align='C')
         self.set_font("Helvetica", 'B', 14); self.cell(190, 7, "GOVT. HIGH SCHOOL BHUTTA MOHABBAT", ln=True, align='C')
-        self.set_font("Helvetica", 'B', 9); self.cell(190, 5, "EMIS CODE: 39310025 | DISTRICT OKARA", ln=True, align='C')
-        self.ln(2); self.set_font("Helvetica", 'B', 18); self.set_text_color(70, 130, 180); self.cell(190, 10, "STUDENT REPORT CARD", ln=True, align='C')
-        self.set_text_color(0,0,0); self.set_font("Helvetica", 'B', 10); self.cell(190, 8, "Session 2025-2026", ln=True, align='C')
+        self.ln(5)
         self.set_fill_color(220, 230, 245); self.set_font("Helvetica", 'B', 9)
         self.cell(95, 8, f" NAME: {str(d['Name']).upper()}", 1, 0, 'L', True); self.cell(95, 8, f" FATHER: {str(d['Father Name']).upper()}", 1, 1, 'L', True)
         self.cell(63, 8, f" CLASS: {d['Class']}", 1, 0, 'L', True); self.cell(64, 8, f" SECTION: {d.get('Section','A')}", 1, 0, 'L', True); self.cell(63, 8, f" ROLL NO: {d['Roll No']}", 1, 1, 'L', True)
@@ -99,41 +95,27 @@ class ResultPDF(FPDF):
             o, t = int(d.get(s, 0)), int(d.get(f"Total_{s}", 50)); obt_t += o; max_t += t
             self.cell(110, 8, f" {s}", 1); self.cell(40, 8, str(t), 1, 0, 'C'); self.cell(40, 8, str(o), 1, 1, 'C')
         self.set_font("Helvetica", 'B', 10); self.cell(110, 9, " GRAND TOTAL", 1); self.cell(40, 9, str(max_t), 1, 0, 'C'); self.cell(40, 9, str(obt_t), 1, 1, 'C')
-        self.ln(4)
         perc = (obt_t / max_t * 100) if max_t > 0 else 0
         grade, perf = get_grade_perf(perc)
-        self.set_font("Helvetica", 'B', 8)
-        self.cell(47, 10, f"PERC: {perc:.1f}%", 1, 0, 'C'); self.cell(47, 10, "POS: ---", 1, 0, 'C')
-        self.cell(47, 10, f"PERF: {perf}", 1, 0, 'C'); self.cell(49, 10, f"GRADE: {grade}", 1, 1, 'C')
-        self.ln(15); self.set_font("Helvetica", 'I', 10); 
-        self.multi_cell(190, 6, '"Education is the most powerful weapon which you can use to change the world."', align='C')
-        self.ln(15); self.set_font("Helvetica", 'B', 9); self.cell(95, 10, "_______________________", 0, 0, 'C'); self.cell(95, 10, "_______________________", 0, 1, 'C')
-        self.cell(95, 5, "CLASS TEACHER", 0, 0, 'C'); self.cell(95, 5, "HEAD MASTER", 0, 1, 'C')
+        self.ln(10); self.cell(190, 10, f"GRADE: {grade} | PERFORMANCE: {perf}", 0, 1, 'C')
 
 class AwardListPDF(FPDF):
     def generate(self, data_list, cl_name, sec_name):
         self.add_page()
-        self.set_font("Helvetica", 'B', 14); self.cell(190, 10, "GOVT. HIGH SCHOOL BHUTTA MOHABBAT", ln=True, align='C')
-        self.set_font("Helvetica", 'B', 12); self.cell(190, 8, f"AWARD LIST - {cl_name} ({sec_name})", ln=True, align='C')
-        self.ln(5); self.set_fill_color(230, 230, 230); self.set_font("Helvetica", 'B', 10)
-        self.cell(20, 10, "Roll", 1, 0, 'C', True); self.cell(100, 10, "Name", 1, 0, 'C', True); self.cell(35, 10, "Marks", 1, 0, 'C', True); self.cell(35, 10, "%", 1, 1, 'C', True)
+        self.set_font("Helvetica", 'B', 14); self.cell(190, 10, "AWARD LIST - " + cl_name, ln=True, align='C')
+        self.ln(5); self.set_font("Helvetica", 'B', 10)
+        self.cell(20, 10, "Roll", 1); self.cell(100, 10, "Name", 1); self.cell(35, 10, "Marks", 1); self.cell(35, 10, "%", 1, 1)
         self.set_font("Helvetica", '', 10)
         for r in data_list:
-            self.cell(20, 8, str(r['Roll No']), 1, 0, 'C')
-            self.cell(100, 8, f" {str(r['Name']).upper()}", 1, 0, 'L')
-            self.cell(35, 8, str(r['Total']), 1, 0, 'C')
-            self.cell(35, 8, f"{r['Perc']:.1f}%", 1, 1, 'C')
+            self.cell(20, 8, str(r['Roll No']), 1); self.cell(100, 8, str(r['Name']), 1); self.cell(35, 8, str(r['Total']), 1); self.cell(35, 8, f"{r['Perc']:.1f}%", 1, 1)
 
-# --- SIDEBAR ---
-if db: st.success("🟢 Permanent Cloud Storage Active")
-else: st.warning("🔴 Temporary Mode")
-
+# --- UI ---
 with st.sidebar:
     st.header("Settings")
-    cl = st.selectbox("Select Class", CLASSES, key="sb_cl")
-    sc = st.selectbox("Select Section", SECTIONS, key="sb_sc")
-    sel = [s for s in SUBJECTS if st.checkbox(s, value=True, key=f"check_{s}")]
-    logo = st.file_uploader("Upload Logo", type=['png', 'jpg'])
+    cl = st.selectbox("Class", CLASSES)
+    sc = st.selectbox("Section", SECTIONS)
+    sel = [s for s in SUBJECTS if st.checkbox(s, value=True, key=f"s_{s}")]
+    logo = st.file_uploader("Logo", type=['png', 'jpg'])
     if 'auth' not in st.session_state:
         pw = st.text_input("Key", type="password")
         if st.button("Login"):
@@ -142,67 +124,54 @@ with st.sidebar:
 
 # --- MAIN ---
 df = get_students()
-# DEBUG: Agar data bilkul nazar na aaye to niche expander check karein
-with st.expander("System Debug - Database Content"):
-    st.write(df)
+fil = df[(df["Class"] == cl) & (df["Section"] == sc)] if not df.empty else pd.DataFrame()
 
-if not df.empty:
-    fil = df[(df["Class"] == cl) & (df["Section"] == sc)]
-else:
-    fil = pd.DataFrame()
+t1, t2, t3 = st.tabs(["🖊️ Marks", "📋 Directory", "🖨️ Print"])
 
-tab1, tab2, tab3 = st.tabs(["🖊️ Marks", "📋 Directory", "🖨️ Print"])
-
-with tab1:
-    if fil.empty: st.info("No students found.")
+with t1:
+    if fil.empty: st.info("No students.")
     else:
         sn = st.selectbox("Student", fil["Name"].unique())
-        student_row = fil[fil["Name"] == sn].iloc[0].to_dict()
-        with st.form("marks_form"):
+        s_row = fil[fil["Name"] == sn].iloc[0].to_dict()
+        with st.form("m_form"):
             for s in sel:
                 c1, c2 = st.columns(2)
-                student_row[s] = c1.number_input(f"{s} Obt", 0, 500, int(student_row.get(s, 0)))
-                student_row[f"Total_{s}"] = c2.number_input(f"{s} Tot", 1, 500, int(student_row.get(f"Total_{s}", 50)))
-            if st.form_submit_button("Save Marks"):
-                if save_student(student_row): st.success("Saved!"); st.rerun()
+                s_row[s] = c1.number_input(f"{s}", 0, 500, int(s_row.get(s, 0)))
+                s_row[f"Total_{s}"] = c2.number_input(f"Total {s}", 1, 500, int(s_row.get(f"Total_{s}", 50)))
+            if st.form_submit_button("Save"):
+                if save_student(s_row): st.success("Saved!"); st.rerun()
 
-with tab2:
-    with st.form("add_form"):
-        r_in = st.number_input("Roll No", 1)
-        n_in = st.text_input("Full Name")
-        f_in = st.text_input("Father Name")
-        if st.form_submit_button("Register Student"):
-            new_s = {"Roll No": r_in, "Name": n_in, "Father Name": f_in, "Class": cl, "Section": sc}
-            for s in SUBJECTS: new_s[s] = 0; new_s[f"Total_{s}"] = 50
-            if save_student(new_s): st.success("Added!"); st.rerun()
+with t2:
+    with st.form("a_form"):
+        r_i = st.number_input("Roll No", 1)
+        n_i = st.text_input("Name")
+        f_i = st.text_input("Father Name")
+        if st.form_submit_button("Add Student"):
+            new_data = {"Roll No": r_i, "Name": n_i, "Father Name": f_i, "Class": cl, "Section": sc}
+            for s in SUBJECTS: new_data[s] = 0; new_data[f"Total_{s}"] = 50
+            if save_student(new_data): st.success("Added!"); st.rerun()
     
-    st.write("### Student List")
-    for i, row in fil.sort_values("Roll No").iterrows():
-        c1, c2 = st.columns([5, 1])
-        c1.write(f"Roll {row['Roll No']}: {row['Name']}")
-        if c2.button("🗑️", key=f"del_{row['Roll No']}"):
-            delete_student(cl, sc, row['Roll No']); st.rerun()
+    if not fil.empty:
+        for i, row in fil.sort_values("Roll No").iterrows():
+            c1, c2 = st.columns([5,1])
+            c1.write(f"Roll {row['Roll No']}: {row['Name']}")
+            if c2.button("🗑️", key=f"d_{row['Roll No']}"):
+                delete_student(cl, sc, row['Roll No']); st.rerun()
 
-with tab3:
-    if fil.empty: st.error("No data.")
+with t3:
+    if fil.empty: st.warning("No data.")
     else:
-        pn = st.selectbox("Select for Print", fil["Name"].unique())
-        if st.button("Generate Card"):
+        pn = st.selectbox("Print", fil["Name"].unique(), key="p_sel")
+        if st.button("Result Card"):
             pdf = ResultPDF(); pdf.draw(fil[fil["Name"] == pn].iloc[0], sel, logo)
             st.download_button(f"Download_{pn}.pdf", bytes(pdf.output()), f"{pn}.pdf")
         
         st.divider()
-        if st.button("Download All Cards (Bulk)"):
-            pdf = ResultPDF()
-            for _, r in fil.sort_values("Roll No").iterrows(): pdf.draw(r, sel, logo)
-            st.download_button("Download All", bytes(pdf.output()), "All_Results.pdf")
-            
-        st.divider()
-        if st.button("Generate Award List"):
-            award_list = []
+        if st.button("Award List"):
+            aw_data = []
             for _, r in fil.sort_values("Roll No").iterrows():
                 obt = sum([int(r.get(s, 0)) for s in sel])
                 tot = sum([int(r.get(f"Total_{s}", 50)) for s in sel])
-                award_list.append({"Roll No": r['Roll No'], "Name": r['Name'], "Total": obt, "Perc": (obt/tot*100) if tot>0 else 0})
-            pdf_aw = AwardListPDF(); pdf_aw.generate(award_list, cl, sc)
-            st.download_button("Download Award List", bytes(pdf_aw.output()), "Award_List.pdf")
+                aw_data.append({"Roll No": r['Roll No'], "Name": r['Name'], "Total": obt, "Perc": (obt/tot*100) if tot>0 else 0})
+            pdf_aw = AwardListPDF(); pdf_aw.generate(aw_data, cl, sc)
+            st.download_button("Download Award List.pdf", bytes(pdf_aw.output()), "AwardList.pdf")
