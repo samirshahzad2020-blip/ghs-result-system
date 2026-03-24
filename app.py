@@ -39,8 +39,8 @@ def get_grade_perf(p):
     elif p >= 40: return "D", "Fair"
     else: return "F", "Poor / Fail"
 
-# --- DATA FUNCTIONS (WITH SAFETY) ---
-@st.cache_data(ttl=300) # 5 Minute Cache
+# --- DATA FUNCTIONS (WITH CACHING TO SAVE QUOTA) ---
+@st.cache_data(ttl=600)
 def get_students_cached(_db_ref):
     if _db_ref:
         try:
@@ -49,7 +49,6 @@ def get_students_cached(_db_ref):
                 return pd.DataFrame([doc.to_dict() for doc in docs])
         except Exception as e:
             st.warning(f"Database sync issue: {e}")
-    # Return empty DF with required columns to prevent KeyError
     return pd.DataFrame(columns=["Roll No", "Name", "Father Name", "Class", "Section"] + SUBJECTS)
 
 def save_student(data):
@@ -57,7 +56,7 @@ def save_student(data):
         try:
             uid = f"{data['Class']}_{data['Section']}_{data['Roll No']}".replace(" ", "_")
             db.collection(*COL_PATH).document(uid).set(data)
-            st.cache_data.clear() # Clear cache on save
+            st.cache_data.clear() 
             return True
         except: return False
     return False
@@ -95,12 +94,22 @@ class ResultPDF(FPDF):
         grade, perf = get_grade_perf(perc)
         self.ln(10); self.cell(190, 10, f"GRADE: {grade} | PERFORMANCE: {perf}", 0, 1, 'C')
 
+class AwardListPDF(FPDF):
+    def generate(self, data_list, cl_name, sec_name):
+        self.add_page()
+        self.set_font("Helvetica", 'B', 14); self.cell(190, 10, "AWARD LIST - " + cl_name + " (" + sec_name + ")", ln=True, align='C')
+        self.ln(5); self.set_font("Helvetica", 'B', 10)
+        self.cell(20, 10, "Roll", 1); self.cell(100, 10, "Name", 1); self.cell(35, 10, "Marks", 1); self.cell(35, 10, "%", 1, 1)
+        self.set_font("Helvetica", '', 10)
+        for r in data_list:
+            self.cell(20, 8, str(r['Roll No']), 1); self.cell(100, 8, str(r['Name']).upper(), 1); self.cell(35, 8, str(r['Total']), 1); self.cell(35, 8, f"{r['Perc']:.1f}%", 1, 1)
+
 # --- UI INTERFACE ---
 with st.sidebar:
-    st.header("Settings")
+    st.header("Class Management")
     cl = st.selectbox("Select Class", CLASSES)
     sc = st.selectbox("Select Section", SECTIONS)
-    if st.button("🔄 Refresh Data"):
+    if st.button("🔄 Force Refresh Data"):
         st.cache_data.clear()
         st.rerun()
     st.divider()
@@ -114,33 +123,31 @@ with st.sidebar:
 
 # --- MAIN ---
 df = get_students_cached(db)
-
-# Safety check for filter
 if not df.empty and "Class" in df.columns:
     fil = df[(df["Class"] == cl) & (df["Section"] == sc)]
 else:
     fil = pd.DataFrame(columns=["Roll No", "Name", "Father Name", "Class", "Section"] + SUBJECTS)
 
-tab1, tab2, tab3 = st.tabs(["🖊️ Marks", "📋 Directory", "🖨️ Print"])
+tab1, tab2, tab3 = st.tabs(["🖊️ Marks Entry", "📋 Student Directory", "🖨️ Print Results"])
 
 with tab1:
-    if fil.empty: st.info("No students in this class/section.")
+    if fil.empty: st.info(f"Class {cl} ({sc}) is empty.")
     else:
-        sn = st.selectbox("Select Student", fil["Name"].unique())
+        sn = st.selectbox("Select Student", fil["Name"].unique(), key="m_sel")
         s_row = fil[fil["Name"] == sn].iloc[0].to_dict()
-        with st.form("m_form"):
+        with st.form("marks_form"):
             for s in sel:
                 c1, c2 = st.columns(2)
-                s_row[s] = c1.number_input(f"{s} Obt", 0, 500, int(s_row.get(s, 0)))
-                s_row[f"Total_{s}"] = c2.number_input(f"{s} Tot", 1, 500, int(s_row.get(f"Total_{s}", 50)))
-            if st.form_submit_button("Save Marks"):
+                s_row[s] = c1.number_input(f"{s} Obtained", 0, 500, int(s_row.get(s, 0)))
+                s_row[f"Total_{s}"] = c2.number_input(f"{s} Total", 1, 500, int(s_row.get(f"Total_{s}", 50)))
+            if st.form_submit_button("Save Marks Permanently"):
                 if save_student(s_row): st.success("Saved!"); st.rerun()
 
 with tab2:
-    with st.form("a_form"):
+    with st.form("add_form"):
         st.subheader("Add New Student")
         r_i = st.number_input("Roll No", 1)
-        n_i = st.text_input("Name")
+        n_i = st.text_input("Full Name")
         f_i = st.text_input("Father Name")
         if st.form_submit_button("Register"):
             new_s = {"Roll No": r_i, "Name": n_i, "Father Name": f_i, "Class": cl, "Section": sc}
@@ -149,18 +156,37 @@ with tab2:
     
     if not fil.empty:
         st.write("### Student List")
-        # Added safety for sort
-        sorted_fil = fil.sort_values("Roll No") if "Roll No" in fil.columns else fil
-        for i, row in sorted_fil.iterrows():
+        for i, row in fil.sort_values("Roll No").iterrows():
             c1, c2 = st.columns([5,1])
             c1.write(f"Roll {row['Roll No']}: {row['Name']}")
             if c2.button("🗑️", key=f"del_{row['Roll No']}"):
                 delete_student(cl, sc, row['Roll No']); st.rerun()
 
 with tab3:
-    if fil.empty: st.warning("No data.")
+    if fil.empty: st.warning("No data found for this class.")
     else:
-        pn = st.selectbox("Select Student", fil["Name"].unique(), key="print_sel")
-        if st.button("Generate Card"):
-            pdf = ResultPDF(); pdf.draw(fil[fil["Name"] == pn].iloc[0], sel, logo)
-            st.download_button(f"Download_{pn}.pdf", bytes(pdf.output()), f"{pn}.pdf")
+        col_1, col_2 = st.columns(2)
+        with col_1:
+            st.subheader("Individual Print")
+            pn = st.selectbox("Select Student", fil["Name"].unique(), key="p_sel")
+            if st.button("Generate Result Card"):
+                pdf = ResultPDF(); pdf.draw(fil[fil["Name"] == pn].iloc[0], sel, logo)
+                st.download_button(f"Download_{pn}.pdf", bytes(pdf.output()), f"{pn}.pdf")
+
+        with col_2:
+            st.subheader("Bulk Printing")
+            if st.button("Generate Bulk PDF (All Students)"):
+                pdf_bulk = ResultPDF()
+                for _, r in fil.sort_values("Roll No").iterrows():
+                    pdf_bulk.draw(r, sel, logo)
+                st.download_button("Download All Cards.pdf", bytes(pdf_bulk.output()), f"Bulk_{cl}_{sc}.pdf")
+            
+            st.divider()
+            if st.button("Generate Award List"):
+                aw_data = []
+                for _, r in fil.sort_values("Roll No").iterrows():
+                    obt = sum([int(r.get(s, 0)) for s in sel])
+                    tot = sum([int(r.get(f"Total_{s}", 50)) for s in sel])
+                    aw_data.append({"Roll No": r['Roll No'], "Name": r['Name'], "Total": obt, "Perc": (obt/tot*100) if tot>0 else 0})
+                pdf_aw = AwardListPDF(); pdf_aw.generate(aw_data, cl, sc)
+                st.download_button("Download Award List.pdf", bytes(pdf_aw.output()), f"AwardList_{cl}_{sc}.pdf")
