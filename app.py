@@ -39,7 +39,7 @@ def get_grade_perf(p):
     elif p >= 40: return "D", "Fair"
     else: return "F", "Poor / Fail"
 
-# --- DATA FUNCTIONS (WITH CACHING TO SAVE QUOTA) ---
+# --- DATA FUNCTIONS (WITH CACHING) ---
 @st.cache_data(ttl=600)
 def get_students_cached(_db_ref):
     if _db_ref:
@@ -47,8 +47,7 @@ def get_students_cached(_db_ref):
             docs = list(_db_ref.collection(*COL_PATH).stream())
             if docs:
                 return pd.DataFrame([doc.to_dict() for doc in docs])
-        except Exception as e:
-            st.warning(f"Database sync issue: {e}")
+        except Exception: pass
     return pd.DataFrame(columns=["Roll No", "Name", "Father Name", "Class", "Section"] + SUBJECTS)
 
 def save_student(data):
@@ -69,42 +68,74 @@ def delete_student(cls, sec, roll):
             st.cache_data.clear()
         except: pass
 
-# --- PDF ENGINES ---
+# --- PDF ENGINE (RESTORED TO ORIGINAL DESIGN) ---
 class ResultPDF(FPDF):
     def draw(self, d, subs, logo):
         self.add_page()
+        # Original Double Borders
         self.set_line_width(0.5); self.rect(5, 5, 200, 287)
+        self.set_line_width(0.2); self.rect(7, 7, 196, 283)
+        
         if logo:
             try: self.image(logo, 10, 10, 25)
             except: pass
+        
+        # Original Header
+        self.set_font("Helvetica", 'B', 8); self.cell(190, 4, "SCHOOL EDUCATION DEPARTMENT", ln=True, align='C')
         self.set_font("Helvetica", 'B', 14); self.cell(190, 7, "GOVT. HIGH SCHOOL BHUTTA MOHABBAT", ln=True, align='C')
-        self.ln(5)
+        self.set_font("Helvetica", 'B', 9); self.cell(190, 5, "EMIS CODE: 39310025 | DISTRICT OKARA", ln=True, align='C')
+        self.ln(2)
+        self.set_font("Helvetica", 'B', 18); self.set_text_color(70, 130, 180); self.cell(190, 10, "STUDENT REPORT CARD", ln=True, align='C')
+        self.set_text_color(0,0,0); self.set_font("Helvetica", 'B', 10); self.cell(190, 8, "Session 2025-2026", ln=True, align='C')
+        
+        # Student Info
         self.set_fill_color(220, 230, 245); self.set_font("Helvetica", 'B', 9)
         self.cell(95, 8, f" NAME: {str(d['Name']).upper()}", 1, 0, 'L', True); self.cell(95, 8, f" FATHER: {str(d['Father Name']).upper()}", 1, 1, 'L', True)
         self.cell(63, 8, f" CLASS: {d['Class']}", 1, 0, 'L', True); self.cell(64, 8, f" SECTION: {d.get('Section','A')}", 1, 0, 'L', True); self.cell(63, 8, f" ROLL NO: {d['Roll No']}", 1, 1, 'L', True)
+        
         self.ln(3); self.set_fill_color(50, 50, 50); self.set_text_color(255, 255, 255)
         self.cell(110, 9, "SUBJECT", 1, 0, 'C', True); self.cell(40, 9, "TOTAL", 1, 0, 'C', True); self.cell(40, 9, "OBTAINED", 1, 1, 'C', True)
         self.set_text_color(0, 0, 0); self.set_font("Helvetica", '', 10)
+        
         obt_t, max_t = 0, 0
         for s in subs:
             o, t = int(d.get(s, 0)), int(d.get(f"Total_{s}", 50)); obt_t += o; max_t += t
             self.cell(110, 8, f" {s}", 1); self.cell(40, 8, str(t), 1, 0, 'C'); self.cell(40, 8, str(o), 1, 1, 'C')
+        
         self.set_font("Helvetica", 'B', 10); self.cell(110, 9, " GRAND TOTAL", 1); self.cell(40, 9, str(max_t), 1, 0, 'C'); self.cell(40, 9, str(obt_t), 1, 1, 'C')
+        
+        self.ln(4)
         perc = (obt_t / max_t * 100) if max_t > 0 else 0
         grade, perf = get_grade_perf(perc)
-        self.ln(10); self.cell(190, 10, f"GRADE: {grade} | PERFORMANCE: {perf}", 0, 1, 'C')
+        
+        self.set_font("Helvetica", 'B', 8)
+        self.cell(47, 10, f"PERC: {perc:.1f}%", 1, 0, 'C')
+        self.cell(47, 10, f"POS: {d.get('Position', '---')}", 1, 0, 'C')
+        self.cell(47, 10, f"PERF: {perf}", 1, 0, 'C')
+        self.cell(49, 10, f"GRADE: {grade}", 1, 1, 'C')
+        
+        # Footer Quotes and Signatures
+        self.ln(15); self.set_font("Helvetica", 'I', 10); 
+        self.multi_cell(190, 6, '"Education is the most powerful weapon which you can use to change the world."\n"The beautiful thing about learning is that no one can take it away from you."', align='C')
+        self.ln(15); self.set_font("Helvetica", 'B', 9); self.cell(95, 10, "_______________________", 0, 0, 'C'); self.cell(95, 10, "_______________________", 0, 1, 'C')
+        self.cell(95, 5, "CLASS TEACHER", 0, 0, 'C'); self.cell(95, 5, "SENIOR HEAD MASTER (SAFDAR JAVED)", 0, 1, 'C')
+        self.ln(5); self.set_font("Helvetica", '', 8); self.cell(190, 10, "Result Date: 31-03-2026", 0, 0, 'R')
 
 class AwardListPDF(FPDF):
     def generate(self, data_list, cl_name, sec_name):
         self.add_page()
-        self.set_font("Helvetica", 'B', 14); self.cell(190, 10, "AWARD LIST - " + cl_name + " (" + sec_name + ")", ln=True, align='C')
-        self.ln(5); self.set_font("Helvetica", 'B', 10)
-        self.cell(20, 10, "Roll", 1); self.cell(100, 10, "Name", 1); self.cell(35, 10, "Marks", 1); self.cell(35, 10, "%", 1, 1)
+        self.set_font("Helvetica", 'B', 14); self.cell(190, 10, "GOVT. HIGH SCHOOL BHUTTA MOHABBAT", ln=True, align='C')
+        self.set_font("Helvetica", 'B', 12); self.cell(190, 8, f"AWARD LIST - {cl_name} ({sec_name})", ln=True, align='C')
+        self.ln(5); self.set_fill_color(230, 230, 230); self.set_font("Helvetica", 'B', 10)
+        self.cell(20, 10, "Roll", 1, 0, 'C', True); self.cell(100, 10, "Name", 1, 0, 'C', True); self.cell(35, 10, "Marks", 1, 0, 'C', True); self.cell(35, 10, "%", 1, 1, 'C', True)
         self.set_font("Helvetica", '', 10)
         for r in data_list:
-            self.cell(20, 8, str(r['Roll No']), 1); self.cell(100, 8, str(r['Name']).upper(), 1); self.cell(35, 8, str(r['Total']), 1); self.cell(35, 8, f"{r['Perc']:.1f}%", 1, 1)
+            self.cell(20, 8, str(r['Roll No']), 1, 0, 'C')
+            self.cell(100, 8, f" {str(r['Name']).upper()}", 1, 0, 'L')
+            self.cell(35, 8, str(r['Total']), 1, 0, 'C')
+            self.cell(35, 8, f"{r['Perc']:.1f}%", 1, 1, 'C')
 
-# --- UI INTERFACE ---
+# --- SIDEBAR ---
 with st.sidebar:
     st.header("Class Management")
     cl = st.selectbox("Select Class", CLASSES)
@@ -124,7 +155,12 @@ with st.sidebar:
 # --- MAIN ---
 df = get_students_cached(db)
 if not df.empty and "Class" in df.columns:
-    fil = df[(df["Class"] == cl) & (df["Section"] == sc)]
+    fil = df[(df["Class"] == cl) & (df["Section"] == sc)].copy()
+    if not fil.empty:
+        # Calculate Positions
+        fil['Total_Obtained'] = fil[sel].apply(pd.to_numeric).sum(axis=1)
+        fil['Position'] = fil['Total_Obtained'].rank(ascending=False, method='min').astype(int)
+        fil = fil.sort_values("Roll No")
 else:
     fil = pd.DataFrame(columns=["Roll No", "Name", "Father Name", "Class", "Section"] + SUBJECTS)
 
@@ -156,35 +192,35 @@ with tab2:
     
     if not fil.empty:
         st.write("### Student List")
-        for i, row in fil.sort_values("Roll No").iterrows():
+        for i, row in fil.iterrows():
             c1, c2 = st.columns([5,1])
             c1.write(f"Roll {row['Roll No']}: {row['Name']}")
             if c2.button("🗑️", key=f"del_{row['Roll No']}"):
                 delete_student(cl, sc, row['Roll No']); st.rerun()
 
 with tab3:
-    if fil.empty: st.warning("No data found for this class.")
+    if fil.empty: st.warning("No data found.")
     else:
-        col_1, col_2 = st.columns(2)
-        with col_1:
-            st.subheader("Individual Print")
+        c1, c2 = st.columns(2)
+        with c1:
+            st.subheader("Single Result")
             pn = st.selectbox("Select Student", fil["Name"].unique(), key="p_sel")
-            if st.button("Generate Result Card"):
-                pdf = ResultPDF(); pdf.draw(fil[fil["Name"] == pn].iloc[0], sel, logo)
+            if st.button("Generate Card"):
+                pdf = ResultPDF(); pdf.draw(fil[fil["Name"] == pn].iloc[0].to_dict(), sel, logo)
                 st.download_button(f"Download_{pn}.pdf", bytes(pdf.output()), f"{pn}.pdf")
 
-        with col_2:
+        with c2:
             st.subheader("Bulk Printing")
-            if st.button("Generate Bulk PDF (All Students)"):
+            if st.button("Generate All Result Cards"):
                 pdf_bulk = ResultPDF()
-                for _, r in fil.sort_values("Roll No").iterrows():
-                    pdf_bulk.draw(r, sel, logo)
-                st.download_button("Download All Cards.pdf", bytes(pdf_bulk.output()), f"Bulk_{cl}_{sc}.pdf")
+                for _, r in fil.iterrows():
+                    pdf_bulk.draw(r.to_dict(), sel, logo)
+                st.download_button("Download All.pdf", bytes(pdf_bulk.output()), f"Bulk_{cl}_{sc}.pdf")
             
             st.divider()
             if st.button("Generate Award List"):
                 aw_data = []
-                for _, r in fil.sort_values("Roll No").iterrows():
+                for _, r in fil.iterrows():
                     obt = sum([int(r.get(s, 0)) for s in sel])
                     tot = sum([int(r.get(f"Total_{s}", 50)) for s in sel])
                     aw_data.append({"Roll No": r['Roll No'], "Name": r['Name'], "Total": obt, "Perc": (obt/tot*100) if tot>0 else 0})
