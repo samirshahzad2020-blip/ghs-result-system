@@ -97,36 +97,44 @@ class ResultPDF(FPDF):
         self.cell(95, 5, "CLASS TEACHER", 0, 0, 'C'); self.cell(95, 5, "HEAD MASTER (SAFDAR JAVED)", 0, 1, 'C')
 
 class GrandAwardListPDF(FPDF):
-    def generate_grand_list(self, grand_data):
+    def generate_grand_list(self, grand_sections):
         self.add_page()
         self.set_font("Helvetica", 'B', 16); self.cell(190, 10, "GOVT. HIGH SCHOOL BHUTTA MOHABBAT", ln=True, align='C')
-        self.set_font("Helvetica", 'B', 12); self.cell(190, 8, "GRAND TOPPERS LIST (TOP 5 EACH SECTION)", ln=True, align='C')
+        self.set_font("Helvetica", 'B', 12); self.cell(190, 8, "GRAND TOPPERS LIST (TOP 5 EACH CLASS)", ln=True, align='C')
         self.ln(5)
         
-        for entry in grand_data:
-            if self.get_y() > 220: self.add_page()
-            self.set_fill_color(230, 230, 230); self.set_font("Helvetica", 'B', 11)
-            self.cell(190, 10, f" {entry['class']} - SECTION: {entry['section']} ", 1, 1, 'L', True)
+        for sec_name, classes_data in grand_sections.items():
+            # Big Section Header
+            self.set_fill_color(50, 50, 50); self.set_text_color(255, 255, 255); self.set_font("Helvetica", 'B', 14)
+            self.cell(190, 12, f" --- SECTION {sec_name} --- ", 1, 1, 'C', True)
+            self.set_text_color(0, 0, 0)
+            self.ln(2)
             
-            # Header with Father Name included
-            self.set_fill_color(245, 245, 245); self.set_font("Helvetica", 'B', 8)
-            self.cell(12, 10, "Pos", 1, 0, 'C', True); self.cell(15, 10, "Roll", 1, 0, 'C', True)
-            self.cell(63, 10, "Student Name", 1, 0, 'C', True); self.cell(63, 10, "Father Name", 1, 0, 'C', True)
-            self.cell(17, 10, "Marks", 1, 0, 'C', True); self.cell(20, 10, "%", 1, 1, 'C', True)
-            
-            self.set_font("Helvetica", '', 9)
-            for r in entry['students']:
-                self.cell(12, 8, str(r['DisplayPos']), 1, 0, 'C'); self.cell(15, 8, str(r['Roll No']), 1, 0, 'C')
-                self.cell(63, 8, f" {str(r['Name']).upper()[:28]}", 1, 0, 'L')
-                self.cell(63, 8, f" {str(r['Father Name']).upper()[:28]}", 1, 0, 'L')
-                self.cell(17, 8, str(int(r['Total'])), 1, 0, 'C'); self.cell(20, 8, f"{r['Perc']:.1f}%", 1, 1, 'C')
-            self.ln(5)
+            for entry in classes_data:
+                if self.get_y() > 220: self.add_page()
+                # Class Heading
+                self.set_fill_color(230, 230, 230); self.set_font("Helvetica", 'B', 10)
+                self.cell(190, 8, f" CLASS: {entry['class']} ", 1, 1, 'L', True)
+                
+                # Table Header
+                self.set_fill_color(245, 245, 245); self.set_font("Helvetica", 'B', 8)
+                self.cell(10, 10, "Pos", 1, 0, 'C', True); self.cell(12, 10, "Roll", 1, 0, 'C', True)
+                self.cell(65, 10, "Student Name", 1, 0, 'C', True); self.cell(65, 10, "Father Name", 1, 0, 'C', True)
+                self.cell(18, 10, "Marks", 1, 0, 'C', True); self.cell(20, 10, "%", 1, 1, 'C', True)
+                
+                self.set_font("Helvetica", '', 9)
+                for r in entry['students']:
+                    self.cell(10, 8, str(r['DisplayPos']), 1, 0, 'C'); self.cell(12, 8, str(r['Roll No']), 1, 0, 'C')
+                    self.cell(65, 8, f" {str(r['Name']).upper()[:28]}", 1, 0, 'L')
+                    self.cell(65, 8, f" {str(r['Father Name']).upper()[:28]}", 1, 0, 'L')
+                    self.cell(18, 8, str(int(r['Total'])), 1, 0, 'C'); self.cell(20, 8, f"{r['Perc']:.1f}%", 1, 1, 'C')
+                self.ln(4)
 
 # --- SIDEBAR ---
 with st.sidebar:
     st.header("Class Management")
     cl = st.selectbox("Select Class", CLASSES); sc = st.selectbox("Select Section", SECTIONS)
-    if st.button("🔄 Force Refresh Data"): st.cache_data.clear(); st.rerun()
+    if st.button("🔄 Force Refresh"): st.cache_data.clear(); st.rerun()
     st.divider()
     sel = [s for s in SUBJECTS if st.checkbox(s, value=True, key=f"s_{s}")]
     logo = st.file_uploader("Upload Logo", type=['png', 'jpg'])
@@ -155,7 +163,7 @@ with tab1:
     else:
         sn = st.selectbox("Select Student", fil["Name"].unique())
         s_row = fil[fil["Name"] == sn].iloc[0].to_dict()
-        with st.form("marks_form"):
+        with st.form("m_form"):
             for s in sel:
                 c1, c2 = st.columns(2)
                 s_row[s] = c1.number_input(f"{s} Obt", 0, 500, int(s_row.get(s, 0)))
@@ -198,19 +206,16 @@ with tab3:
         with c2:
             st.subheader("🏆 Grand Toppers List")
             if st.button("Generate GRAND TOPPERS"):
-                grand_data = []
-                for c_item in CLASSES:
-                    for s_item in SECTIONS:
+                grand_sections = {"A": [], "B": []}
+                for s_item in SECTIONS:
+                    for c_item in CLASSES:
                         c_df = df[(df["Class"] == c_item) & (df["Section"] == s_item)].copy()
                         if not c_df.empty:
                             c_df[SUBJECTS] = c_df[SUBJECTS].apply(pd.to_numeric, errors='coerce').fillna(0)
-                            # Only count subjects that have ANY marks in this class
                             active_subs = [s for s in SUBJECTS if c_df[s].sum() > 0]
                             if not active_subs: active_subs = ["English"]
-                            
                             c_df['Total_Obtained'] = c_df[active_subs].sum(axis=1)
                             c_df['Max'] = c_df.apply(lambda r: sum([int(r.get(f"Total_{s}", 50)) for s in active_subs]), axis=1)
-                            
                             top5 = c_df.sort_values("Total_Obtained", ascending=False).head(5)
                             students_list = []
                             for idx, r_t in enumerate(top5.to_dict('records')):
@@ -220,9 +225,9 @@ with tab3:
                                     'Total': r_t['Total_Obtained'], 
                                     'Perc': (r_t['Total_Obtained'] / r_t['Max'] * 100) if r_t['Max'] > 0 else 0
                                 })
-                            grand_data.append({'class': c_item, 'section': s_item, 'students': students_list})
+                            grand_sections[s_item].append({'class': c_item, 'section': s_item, 'students': students_list})
                 
-                if grand_data:
+                if any(grand_sections.values()):
                     pdf_g = GrandAwardListPDF()
-                    pdf_g.generate_grand_list(grand_data)
+                    pdf_g.generate_grand_list(grand_sections)
                     st.download_button("Download_Grand_Toppers.pdf", bytes(pdf_g.output(dest='S').encode('latin-1')), "Grand_Toppers.pdf", "application/pdf")
