@@ -1,4 +1,4 @@
 streamlit
-pymupdf
-fpdf
 pandas
+fpdf
+firebase-admin
